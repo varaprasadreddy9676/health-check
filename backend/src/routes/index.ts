@@ -5,6 +5,7 @@ import incidentRoutes from './incidentRoutes';
 import notificationRoutes from './notificationRoutes';
 import actionRoutes from './actionRoutes';
 import statusRoutes from './statusRoutes';
+import { selfMonitoringController } from '../controllers/selfMonitoringController';
 
 const router = Router();
 
@@ -16,16 +17,11 @@ router.use('/notifications', notificationRoutes);
 router.use('/actions', actionRoutes);
 router.use('/status', statusRoutes);
 
-// Health endpoint for the API itself
-router.get('/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    data: {
-      status: 'healthy',
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString(),
-    },
-  });
-});
+// Health endpoint for the API itself (always available even if DB is down)
+router.get('/health', selfMonitoringController.getHealth);
+
+// System status endpoint
+router.get('/system-status', selfMonitoringController.getStatus);
+
 
 export default router;

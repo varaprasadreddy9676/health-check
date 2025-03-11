@@ -50,6 +50,13 @@
     .high-resource-usage {
       background-color: #ffc107;
     }
+    .critical {
+      background-color: #dc3545;
+      color: white;
+    }
+    .high {
+      background-color: #fd7e14;
+    }
     .footer {
       margin-top: 20px;
       font-size: 0.8em;
@@ -70,6 +77,26 @@
       color: white;
       font-size: 24px;
     }
+    .status-indicator {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    .status-healthy {
+      background-color: #28a745;
+    }
+    .status-unhealthy {
+      background-color: #dc3545;
+    }
+    .unsubscribe-notice {
+      font-style: italic;
+      margin-top: 15px;
+      padding: 10px;
+      background-color: #f8f9fa;
+      border-radius: 4px;
+    }
   </style>
 </head>
 <body>
@@ -77,9 +104,7 @@
     <div class="header">
       <h1>{{subject}}</h1>
     </div>
-    
     <p>This report provides an overview of the health status of the applications and services as of {{currentDate}}.</p>
-    
     <table>
       <thead>
         <tr>
@@ -92,16 +117,25 @@
       </thead>
       <tbody>
         {{#each results}}
-        <tr {{#if highResourceUsageExceeded}}class="high-resource-usage"{{/if}}>
+        <tr {{#if severity}}class="{{getSeverityClass severity}}"{{else}}{{#if highResourceUsageExceeded}}class="high-resource-usage"{{/if}}{{/if}}>
           <td>{{name}}</td>
           <td>{{type}}</td>
-          <td class="{{#if (eq status 'Healthy')}}healthy{{else}}unhealthy{{/if}}">{{status}}</td>
+          <td>
+            <span class="status-indicator status-{{#if (eq status 'Healthy')}}healthy{{else}}unhealthy{{/if}}"></span>
+            <span class="{{#if (eq status 'Healthy')}}healthy{{else}}unhealthy{{/if}}">{{status}}</span>
+          </td>
           <td>{{details}}</td>
-          <td>{{lastChecked}}</td>
+          <td>{{formatDate lastChecked}}</td>
         </tr>
         {{/each}}
       </tbody>
     </table>
+    
+    {{#if unsubscribeMsg}}
+    <div class="unsubscribe-notice">
+      <p>{{unsubscribeMsg}}</p>
+    </div>
+    {{/if}}
     
     <div class="footer">
       <p>This is an automated email from the Health Check Service. Please do not reply to this email.</p>

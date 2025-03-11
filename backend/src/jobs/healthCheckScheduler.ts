@@ -3,11 +3,18 @@ import logger from '../utils/logger';
 import { healthCheckService } from '../services/healthCheckService';
 import { getHealthCheckRepository } from '../repositories/factory';
 import { HealthCheck } from '../models/HealthCheck';
+import { localFileStorage } from '../utils/localFileStorage';
+import { isDatabaseAvailable } from '../repositories/factory';
 
 class HealthCheckScheduler {
   private defaultInterval = '*/5 * * * *'; // Default: every 5 minutes
   private cronJobs: Map<string, cron.ScheduledTask> = new Map();
   private isRunning = false;
+  
+  // Cache of health checks to use when database is unavailable
+  private cachedHealthChecks: HealthCheck[] = [];
+  private lastCacheUpdate: number = 0;
+  private readonly CACHE_TTL = 3600000; // 1 hour
 
   constructor() {
     logger.info('Health check scheduler initialized');
@@ -18,14 +25,23 @@ class HealthCheckScheduler {
     try {
       logger.info('Starting health check scheduler');
       
+      // Load cached health checks from file system if available
+      await this.loadCachedHealthChecks();
+      
       // Initialize all health check jobs
       await this.initializeJobs();
       
-      // Schedule a job to refresh health checks every hour
-      // This ensures any newly added checks are scheduled
-      cron.schedule('0 * * * *', async () => {
+      // Schedule a job to refresh health checks every 15 minutes
+      cron.schedule('*/15 * * * *', async () => {
         logger.info('Refreshing health check jobs');
         await this.refreshJobs();
+      });
+      
+      // Schedule a job to save health checks to local storage periodically
+      cron.schedule('*/30 * * * *', async () => {
+        if (isDatabaseAvailable()) {
+          await this.updateCachedHealthChecks();
+        }
       });
       
       // Job to run all health checks at once
@@ -58,14 +74,95 @@ class HealthCheckScheduler {
     }
   }
 
+  // Load cached health checks from local storage
+  private async loadCachedHealthChecks() {
+    try {
+      const cachedData = await localFileStorage.load<{
+        healthChecks: HealthCheck[],
+        timestamp: number
+      }>('healthChecks');
+      
+      if (cachedData && cachedData.healthChecks && cachedData.healthChecks.length > 0) {
+        this.cachedHealthChecks = cachedData.healthChecks;
+        this.lastCacheUpdate = cachedData.timestamp;
+        
+        logger.info({
+          msg: `Loaded ${this.cachedHealthChecks.length} cached health checks from local storage`,
+          lastUpdated: new Date(this.lastCacheUpdate).toISOString()
+        });
+      }
+    } catch (error) {
+      logger.error({
+        msg: 'Error loading cached health checks',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // Update the cached health checks
+  private async updateCachedHealthChecks() {
+    try {
+      const healthCheckRepository = getHealthCheckRepository();
+      const healthChecks = await healthCheckRepository.findAll();
+      
+      // Only update if we got data
+      if (healthChecks && healthChecks.length > 0) {
+        this.cachedHealthChecks = healthChecks;
+        this.lastCacheUpdate = Date.now();
+        
+        // Save to local storage
+        await localFileStorage.save('healthChecks', {
+          healthChecks: this.cachedHealthChecks,
+          timestamp: this.lastCacheUpdate
+        });
+        
+        logger.info({
+          msg: `Updated ${healthChecks.length} cached health checks`
+        });
+      }
+    } catch (error) {
+      logger.error({
+        msg: 'Error updating cached health checks',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // Initialize individual health check jobs
   private async initializeJobs() {
     try {
-      const healthCheckRepository = getHealthCheckRepository();
+      let healthChecks: HealthCheck[] = [];
       
-      // Get all enabled health checks
-      const healthChecks = await healthCheckRepository.findAll({ enabled: true });
+      try {
+        // Try to get health checks from database
+        const healthCheckRepository = getHealthCheckRepository();
+        healthChecks = await healthCheckRepository.findAll({ enabled: true });
+        
+        // If successful, update the cache
+        if (healthChecks.length > 0) {
+          this.cachedHealthChecks = healthChecks;
+          this.lastCacheUpdate = Date.now();
+          
+          // Save to local storage
+          await localFileStorage.save('healthChecks', {
+            healthChecks: this.cachedHealthChecks,
+            timestamp: this.lastCacheUpdate
+          });
+        }
+      } catch (error) {
+        logger.error({
+          msg: 'Error fetching health checks from database, using cached data',
+          error: error instanceof Error ? error.message : String(error),
+        });
+        
+        // Use cached health checks if database is unavailable
+        if (this.cachedHealthChecks.length > 0) {
+          healthChecks = this.cachedHealthChecks.filter(check => check.enabled);
+          logger.info(`Using ${healthChecks.length} cached health checks`);
+        }
+      }
       
+      // Schedule jobs for each health check
       for (const healthCheck of healthChecks) {
         this.scheduleHealthCheck(healthCheck);
       }
@@ -111,7 +208,7 @@ class HealthCheckScheduler {
         this.cronJobs.delete(healthCheck.id);
       }
       
-      // Create new job
+      // Create new job with error handling
       const job = cron.schedule(cronExpression, async () => {
         try {
           logger.info({
@@ -120,7 +217,8 @@ class HealthCheckScheduler {
             name: healthCheck.name,
           });
           
-          await healthCheckService.forceHealthCheck(healthCheck.id);
+          // Execute the health check with resilience
+          await this.executeHealthCheckWithRetry(healthCheck.id);
         } catch (error) {
           logger.error({
             msg: 'Error executing scheduled health check',
@@ -148,13 +246,75 @@ class HealthCheckScheduler {
     }
   }
 
+  // Execute health check with retry logic
+  private async executeHealthCheckWithRetry(healthCheckId: string, maxRetries = 3): Promise<void> {
+    let retries = 0;
+    
+    while (retries < maxRetries) {
+      try {
+        await healthCheckService.forceHealthCheck(healthCheckId);
+        return; // Success
+      } catch (error) {
+        retries++;
+        
+        if (retries >= maxRetries) {
+          logger.error({
+            msg: 'Health check failed after max retries',
+            error: error instanceof Error ? error.message : String(error),
+            healthCheckId,
+            retries
+          });
+          throw error;
+        }
+        
+        // Exponential backoff
+        const delay = Math.pow(2, retries) * 1000;
+        logger.warn({
+          msg: `Health check failed, retrying in ${delay}ms`,
+          healthCheckId,
+          retryCount: retries
+        });
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
   // Refresh all health check jobs
   private async refreshJobs() {
     try {
-      const healthCheckRepository = getHealthCheckRepository();
+      let healthChecks: HealthCheck[] = [];
+      let usingCachedData = false;
       
-      // Get all health checks
-      const healthChecks = await healthCheckRepository.findAll();
+      try {
+        // Try to get health checks from database
+        const healthCheckRepository = getHealthCheckRepository();
+        healthChecks = await healthCheckRepository.findAll();
+        
+        // If successful, update the cache
+        if (healthChecks.length > 0) {
+          this.cachedHealthChecks = healthChecks;
+          this.lastCacheUpdate = Date.now();
+          
+          // Save to local storage
+          await localFileStorage.save('healthChecks', {
+            healthChecks: this.cachedHealthChecks,
+            timestamp: this.lastCacheUpdate
+          });
+        }
+      } catch (error) {
+        logger.error({
+          msg: 'Error fetching health checks from database for refresh, using cached data',
+          error: error instanceof Error ? error.message : String(error),
+        });
+        
+        // Use cached health checks if database is unavailable
+        if (this.cachedHealthChecks.length > 0) {
+          healthChecks = this.cachedHealthChecks;
+          usingCachedData = true;
+          logger.info(`Using ${healthChecks.length} cached health checks for refresh`);
+        }
+      }
       
       // Create a set of current health check IDs
       const currentIds = new Set(healthChecks.map(hc => hc.id));
@@ -190,13 +350,18 @@ class HealthCheckScheduler {
         }
       }
       
-      logger.info(`Refreshed health check jobs, active jobs: ${this.cronJobs.size}`);
+      logger.info(`Refreshed health check jobs, active jobs: ${this.cronJobs.size}${usingCachedData ? ' (using cached data)' : ''}`);
     } catch (error) {
       logger.error({
         msg: 'Error refreshing health check jobs',
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+  
+  // Get current active job count (for monitoring)
+  public getActiveJobCount(): number {
+    return this.cronJobs.size;
   }
 }
 

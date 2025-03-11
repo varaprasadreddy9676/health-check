@@ -202,7 +202,6 @@ class HealthCheckService {
     try {
       // Check if notifications are throttled
       const shouldNotify = await this.shouldSendNotification();
-      
       if (!shouldNotify) {
         logger.info({ msg: 'Notifications are throttled, skipping' });
         return;
@@ -214,6 +213,9 @@ class HealthCheckService {
         status: 'Unhealthy',
         details: uc.result.details,
         lastChecked: new Date().toISOString(),
+        healthCheckId: uc.healthCheck.id,  // Include the health check ID
+        // Determine severity based on health check type or custom logic
+        severity: this.determineSeverity(uc.healthCheck, uc.result)
       }));
       
       // Send notifications
@@ -222,12 +224,39 @@ class HealthCheckService {
         results: unhealthyResults,
         hasFailures: true,
       });
-      
     } catch (error) {
       logger.error({
         msg: 'Error sending notifications for unhealthy checks',
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+  
+  // Helper method to determine severity of an unhealthy check
+  private determineSeverity(
+    healthCheck: HealthCheck, 
+    result: HealthCheckExecutionResult
+  ): string {
+    // Logic to determine severity based on health check type
+    switch (healthCheck.type) {
+      case 'SERVER':
+        // Server issues are usually critical
+        return 'critical';
+      case 'API':
+        // API checks could be high
+        return 'high';
+      case 'PROCESS':
+      case 'SERVICE':
+        // Process/service checks depend on the specific process
+        // For critical services
+        if (healthCheck.name.toLowerCase().includes('database') || 
+            healthCheck.name.toLowerCase().includes('auth')) {
+          return 'critical';
+        }
+        // Otherwise high
+        return 'high';
+      default:
+        return 'high';
     }
   }
   
