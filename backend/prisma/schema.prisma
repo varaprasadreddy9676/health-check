@@ -1,0 +1,142 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// HealthCheck configuration model
+model HealthCheck {
+  id            String   @id @default(uuid())
+  name          String
+  type          String   // API, PROCESS, SERVICE, SERVER
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Common fields
+  checkInterval Int      @default(300) // seconds
+
+  // API specific fields
+  endpoint      String?
+  timeout       Int?     @default(5000) // milliseconds
+
+  // Process specific fields
+  processKeyword String?
+  port           Int?
+
+  // Service specific fields
+  customCommand  String?
+  expectedOutput String?
+  
+  // Additional fields for restart capability
+  restartCommand String?
+
+  // Notification settings
+  notifyOnFailure Boolean @default(true)
+  
+  // Relationships
+  results        HealthCheckResult[]
+  incidents      Incident[]
+  
+  @@index([type])
+  @@index([enabled])
+}
+
+// Result of a health check run
+model HealthCheckResult {
+  id            String   @id @default(uuid())
+  healthCheckId String
+  status        String   // Healthy, Unhealthy
+  details       String?
+  memoryUsage   Float?
+  cpuUsage      Float?
+  responseTime  Int?     // milliseconds
+  createdAt     DateTime @default(now())
+
+  healthCheck   HealthCheck @relation(fields: [healthCheckId], references: [id], onDelete: Cascade)
+  
+  @@index([healthCheckId])
+  @@index([createdAt])
+  @@index([status])
+}
+
+// Incidents triggered by unhealthy checks
+model Incident {
+  id            String   @id @default(uuid())
+  healthCheckId String
+  title         String
+  status        String   // investigating, identified, monitoring, resolved
+  severity      String   // critical, high, medium, low
+  details       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  resolvedAt    DateTime?
+
+  healthCheck   HealthCheck @relation(fields: [healthCheckId], references: [id], onDelete: Cascade)
+  events        IncidentEvent[]
+  
+  @@index([healthCheckId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Timeline events for an incident
+model IncidentEvent {
+  id          String   @id @default(uuid())
+  incidentId  String
+  message     String
+  createdAt   DateTime @default(now())
+  
+  incident    Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  @@index([incidentId])
+  @@index([createdAt])
+}
+
+// Notification records
+model Notification {
+  id          String   @id @default(uuid())
+  type        String   // email, slack
+  subject     String
+  content     String
+  recipients  String[]
+  status      String   // sent, failed
+  createdAt   DateTime @default(now())
+  
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// System settings
+model Setting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Email notification settings
+model EmailConfig {
+  id              String   @id @default(uuid())
+  recipients      String[]
+  throttleMinutes Int      @default(60)
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Slack notification settings
+model SlackConfig {
+  id              String   @id @default(uuid())
+  webhookUrl      String
+  channel         String?
+  throttleMinutes Int      @default(60)
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}

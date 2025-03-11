@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{subject}}</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f4f4f4;
+    }
+    .container {
+      width: 100%;
+      max-width: 600px;
+      margin: auto;
+      background-color: #fff;
+      padding: 20px;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+    h1, h2, h3 {
+      color: #333;
+    }
+    table {
+      width: 100%;
+      margin-top: 20px;
+      border-collapse: collapse;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 12px;
+      text-align: left;
+    }
+    th {
+      background-color: #0366d6;
+      color: white;
+    }
+    tr:nth-child(even) {
+      background-color: #f2f2f2;
+    }
+    .healthy {
+      color: #28a745;
+      font-weight: bold;
+    }
+    .unhealthy {
+      color: #dc3545;
+      font-weight: bold;
+    }
+    .high-resource-usage {
+      background-color: #ffc107;
+    }
+    .footer {
+      margin-top: 20px;
+      font-size: 0.8em;
+      color: #888;
+      text-align: center;
+      border-top: 1px solid #eee;
+      padding-top: 10px;
+    }
+    .header {
+      background-color: #0366d6;
+      color: white;
+      padding: 10px;
+      border-radius: 5px 5px 0 0;
+      margin-bottom: 20px;
+    }
+    .header h1 {
+      margin: 0;
+      color: white;
+      font-size: 24px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{{subject}}</h1>
+    </div>
+    
+    <p>This report provides an overview of the health status of the applications and services as of {{currentDate}}.</p>
+    
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Details</th>
+          <th>Last Checked</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each results}}
+        <tr {{#if highResourceUsageExceeded}}class="high-resource-usage"{{/if}}>
+          <td>{{name}}</td>
+          <td>{{type}}</td>
+          <td class="{{#if (eq status 'Healthy')}}healthy{{else}}unhealthy{{/if}}">{{status}}</td>
+          <td>{{details}}</td>
+          <td>{{lastChecked}}</td>
+        </tr>
+        {{/each}}
+      </tbody>
+    </table>
+    
+    <div class="footer">
+      <p>This is an automated email from the Health Check Service. Please do not reply to this email.</p>
+    </div>
+  </div>
+</body>
+</html>

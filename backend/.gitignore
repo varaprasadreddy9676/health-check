@@ -1,0 +1,49 @@
+# Node modules
+/node_modules
+
+# Build output
+/dist
+/build
+/out
+
+# Compiled JavaScript
+*.js
+*.js.map
+
+# TypeScript declaration files
+*.d.ts
+
+# Distribution files
+/coverage
+/package-lock.json
+/yarn-error.log
+
+# Environment files
+.env
+.env.*
+!.env.example # Keep example
+!.env.template # Keep template
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE specific files
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+#VS Code specific files
+.vscode/
+
+# Temporary files
+/tmp
