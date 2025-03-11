@@ -18,7 +18,7 @@
         "type": "PROCESS",
         "name": "EHR Push Engine",
         "processKeyword": "PushData_Engine"
-      }
+      },
       {
         "type": "PROCESS",
         "name": "medics-notification-server(consumer)",
@@ -48,7 +48,7 @@
         "type": "PROCESS",
         "name": "medics-api",
         "processKeyword": "medics-api"
-      }
+      },
       {
         "type": "SERVICE",
         "name": "mongod",
