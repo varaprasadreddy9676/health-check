@@ -193,23 +193,29 @@ export class IncidentMongoRepository implements IncidentRepository {
     }
   }
   
-  // Create new incident
   async create(incident: Omit<Incident, 'id'>): Promise<Incident> {
     try {
       const now = new Date();
-      
-      // Convert string ID to ObjectId for MongoDB
       let healthCheckId: any = incident.healthCheckId;
       try {
+        // Ensure healthCheckId is converted to ObjectId if using MongoDB
         healthCheckId = new ObjectId(incident.healthCheckId);
       } catch (error) {
-        // If conversion fails, keep the original ID (it might already be an ObjectId)
         logger.warn({
           msg: 'Could not convert healthCheckId to ObjectId, using as-is',
           healthCheckId: incident.healthCheckId
         });
       }
       
+      // Add console logging
+      console.log('Creating incident with data:', {
+        healthCheckId,
+        title: incident.title,
+        status: incident.status,
+        severity: incident.severity,
+        details: incident.details
+      });
+  
       const insertResult = await this.incidentsCollection.insertOne({
         healthCheckId,
         title: incident.title,
@@ -220,7 +226,9 @@ export class IncidentMongoRepository implements IncidentRepository {
         updatedAt: now,
         resolvedAt: incident.resolvedAt
       });
-      
+  
+      console.log('Incident insert result:', insertResult);
+  
       return {
         id: insertResult.insertedId.toString(),
         ...incident,
@@ -228,6 +236,7 @@ export class IncidentMongoRepository implements IncidentRepository {
         updatedAt: now
       } as Incident;
     } catch (error) {
+      console.error('Detailed incident creation error:', error);
       logger.error({
         msg: 'Error in MongoDB create incident',
         error: error instanceof Error ? error.message : String(error),

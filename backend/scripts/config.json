@@ -2,7 +2,7 @@
     "checks": [
       {
         "name":"Server",
-        "type": "SERVER"
+        "type": "SERVER_"
       },
       {
         "type": "API",
@@ -11,13 +11,194 @@
       },
       {
         "type": "API",
+        "name": "nova production",
+        "endpoint": "https://nova.medicsivf.com/hc"
+      },
+      {
+        "type": "API",
+        "name": "sankara production",
+        "endpoint": "https://sankara.medicsprime.com/hc"
+      },
+      {
+        "type": "API",
+        "name": "banker production",
+        "endpoint": "https://banker.medicsivf.com/hc"
+      },
+      {
+        "type": "API",
+        "name": "RVMIMS Production",
+        "endpoint": "https://rvmims.medicsprime.com/hc"
+      },
+      {
+        "type": "API",
+        "name": "medics prime - in",
+        "endpoint": "https://medicsprime.in/medics/hc"
+      },
+      {
+        "type": "API",
+        "name": "medics v2",
+        "endpoint": "http://medicsprime.in/v2/Login?"
+      },
+      {
+        "type": "API",
+        "name": "medics v3",
+        "endpoint": "http://medicsprime.in/v3/Login?"
+      },
+      {
+        "type": "API",
+        "name": "medics analytics",
+        "endpoint": "https://medicsanalytics.in/"
+      },
+      {
+        "type": "API",
+        "name": "medics demo",
+        "endpoint": "https://demo.medicsprime.com/"
+      },
+      {
+        "type": "API",
         "name": "medics API",
         "endpoint": "https://api.medicsprime.com/hc"
       },
       {
+        "type": "API",
+        "name": "medics Cloud RT",
+        "endpoint": "https://medicsprime.in/medicsCloudRT/"
+      },
+      {
+        "type": "API",
+        "name": "medics UAE",
+        "endpoint": "https://uae.medicsprime.com/hc"
+      },
+      {
+        "type": "API",
+        "name": "medics XML ",
+        "endpoint": "http://172.31.7.77:8082/medicsXML/hc"
+      },
+      {
+        "type": "API",
+        "name": "medics KIOSK Client",
+        "endpoint": "https://medicsprime.in/medics-kiosk/#/registration/7123456"
+      },
+      {
+        "type": "API",
+        "name": "medics care",
+        "endpoint": "https://medicsprime.in/medicscare/hc"
+        
+      },
+      {
+        "type": "API",
+        "name": "medics now",
+        "endpoint": "https://medicsprime.in/medics-now-val-sever/api/location/getLocations?entityCode=7123456"
+      },
+      {
+        "type": "API",
+        "name": "mdx",
+        "endpoint": "https://medicsprime.in/mdx-client-server/customer"
+      },
+      {
+        "type": "API_",
+        "name": "medics notification",
+        "endpoint": "https://medicsprime.in/medics-notification/api/template"
+      },
+      {
+        "type": "API",
+        "name": "medics communication server",
+        "endpoint": "https://medicsprime.in/medics-communication-service/api/configurations"
+      },
+      {
+        "type": "API",
+        "name": "medics easy landing",
+        "endpoint": "https://www.medicseasy.com/"
+      },
+      {
+        "type": "API",
+        "name": "medics easy(me2)",
+        "endpoint": "https://medicseasy.in/me2/Login"
+      },
+      {
+        "type": "API",
+        "name": "medics subscription client",
+        "endpoint": "https://medicseasy.in/subscription-client/#/pricing"
+      },
+      {
+        "type": "API",
+        "name": "medics subscription server",
+        "endpoint": "https://medicseasy.in/medics-subscription-server/verify/featureGroupCode?planCode="
+      },
+      {
+        "type": "API",
+        "name": "medics attachment server",
+        "endpoint": "https://medicsprime.in/medics-attachment-server/hc"
+      },
+      {
+        "type": "API",
+        "name": "medics digivisit server",
+        "endpoint": "https://medicsprime.in/digivisit-server/hc"
+      },
+      {
         "type": "PROCESS",
-        "name": "EHR Push Engine",
-        "processKeyword": "PushData_Engine"
+        "name": "EHR Sync Engine",
+        "processKeyword": "SyncData"
+      },
+      {
+        "type": "PROCESS",
+        "name": "EHR Push Data 1",
+        "processKeyword": "PushData_1"
+      },
+      {
+        "type": "PROCESS",
+        "name": "EHR Push Data 2",
+        "processKeyword": "PushData_2"
+      },
+      {
+        "type": "PROCESS",
+        "name": "Ferty9 dataset Uploader",
+        "processKeyword": "pullDataEngine"
+      },
+      {
+        "type": "PROCESS",
+        "name": "Ferty9 dataset Uploader",
+        "processKeyword": "pushDataEngine"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-engine",
+        "processKeyword": "medics-engine"
+      },
+      {
+        "type": "PROCESS_",
+        "name": "medics-event-manager-bugfix",
+        "processKeyword": "medics-event-publisher"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-grid",
+        "processKeyword": "medics-grid"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-grid(PostLabOrder)",
+        "processKeyword": "PostLabOrder"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-grid(LabResultReceiver)",
+        "processKeyword": "LabResultReceiver"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-kiosk-server",
+        "processKeyword": "medics-kiosk-server"
+      },
+      {
+        "type": "PROCESS_",
+        "name": "converted-lead-consumer",
+        "processKeyword": "converted-lead-consumer"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-notification-server",
+        "processKeyword": "medics-notification-server"
       },
       {
         "type": "PROCESS",
@@ -30,9 +211,39 @@
         "processKeyword": "medics-doc"
       },
       {
+        "type": "PROCESS_",
+        "name": "medics-ivf-access",
+        "processKeyword": "medics-ivf-access"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medicsnow-flutter-server",
+        "processKeyword": "medicsnow-flutter-server"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics_abdm_server",
+        "processKeyword": "medics-abdm-server"
+      },
+      {
         "type": "PROCESS",
         "name": "medics-subscription-server",
         "processKeyword": "medics-subscription-server"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-data-exchange-crm",
+        "processKeyword": "medics-data-exchange-crm"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-care",
+        "processKeyword": "medics-care"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-now",
+        "processKeyword": "medics-now"
       },
       {
         "type": "API",
@@ -48,6 +259,31 @@
         "type": "PROCESS",
         "name": "medics-api",
         "processKeyword": "medics-api"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-attachment-server",
+        "processKeyword": "medics-attachment-server"
+      },
+      {
+        "type": "PROCESS",
+        "name": "mdx-client-server",
+        "processKeyword": "mdx-client-server"
+      },
+      {
+        "type": "PROCESS",
+        "name": "mdx-transaction-validation",
+        "processKeyword": "mdx-transaction-validation"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-reports-notifier-engine",
+        "processKeyword": "medics-reports-notifier-engine"
+      },
+      {
+        "type": "PROCESS",
+        "name": "medics-error-notifier",
+        "processKeyword": "medics-error-notify-engine"
       },
       {
         "type": "SERVICE",

@@ -1,145 +1,109 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{subject}}</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 0;
-      padding: 0;
-      background-color: #f4f4f4;
-    }
-    .container {
-      width: 100%;
-      max-width: 600px;
-      margin: auto;
-      background-color: #fff;
-      padding: 20px;
-      border-radius: 5px;
-      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-    }
-    h1, h2, h3 {
-      color: #333;
-    }
-    table {
-      width: 100%;
-      margin-top: 20px;
-      border-collapse: collapse;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 12px;
-      text-align: left;
-    }
-    th {
-      background-color: #0366d6;
-      color: white;
-    }
-    tr:nth-child(even) {
-      background-color: #f2f2f2;
-    }
-    .healthy {
-      color: #28a745;
-      font-weight: bold;
-    }
-    .unhealthy {
-      color: #dc3545;
-      font-weight: bold;
-    }
-    .high-resource-usage {
-      background-color: #ffc107;
-    }
-    .critical {
-      background-color: #dc3545;
-      color: white;
-    }
-    .high {
-      background-color: #fd7e14;
-    }
-    .footer {
-      margin-top: 20px;
-      font-size: 0.8em;
-      color: #888;
-      text-align: center;
-      border-top: 1px solid #eee;
-      padding-top: 10px;
-    }
-    .header {
-      background-color: #0366d6;
-      color: white;
-      padding: 10px;
-      border-radius: 5px 5px 0 0;
-      margin-bottom: 20px;
-    }
-    .header h1 {
-      margin: 0;
-      color: white;
-      font-size: 24px;
-    }
-    .status-indicator {
-      display: inline-block;
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      margin-right: 6px;
-    }
-    .status-healthy {
-      background-color: #28a745;
-    }
-    .status-unhealthy {
-      background-color: #dc3545;
-    }
-    .unsubscribe-notice {
-      font-style: italic;
-      margin-top: 15px;
-      padding: 10px;
-      background-color: #f8f9fa;
-      border-radius: 4px;
-    }
-  </style>
 </head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>{{subject}}</h1>
-    </div>
-    <p>This report provides an overview of the health status of the applications and services as of {{currentDate}}.</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Status</th>
-          <th>Details</th>
-          <th>Last Checked</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{#each results}}
-        <tr {{#if severity}}class="{{getSeverityClass severity}}"{{else}}{{#if highResourceUsageExceeded}}class="high-resource-usage"{{/if}}{{/if}}>
-          <td>{{name}}</td>
-          <td>{{type}}</td>
-          <td>
-            <span class="status-indicator status-{{#if (eq status 'Healthy')}}healthy{{else}}unhealthy{{/if}}"></span>
-            <span class="{{#if (eq status 'Healthy')}}healthy{{else}}unhealthy{{/if}}">{{status}}</span>
-          </td>
-          <td>{{details}}</td>
-          <td>{{formatDate lastChecked}}</td>
-        </tr>
-        {{/each}}
-      </tbody>
-    </table>
-    
-    {{#if unsubscribeMsg}}
-    <div class="unsubscribe-notice">
-      <p>{{unsubscribeMsg}}</p>
-    </div>
-    {{/if}}
-    
-    <div class="footer">
-      <p>This is an automated email from the Health Check Service. Please do not reply to this email.</p>
-    </div>
-  </div>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.5; color: #1F2937; background-color: #f5f7fa; margin: 0; padding: 0;">
+  <!-- Main Container -->
+  <table cellpadding="0" cellspacing="0" border="0" width="100%" style="min-width: 100%; background-color: #f5f7fa;">
+    <tr>
+      <td align="center" style="padding: 40px 10px;">
+        <!-- Email Container -->
+        <table cellpadding="0" cellspacing="0" border="0" width="600" style="max-width: 600px; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);">
+          <!-- Header -->
+          <tr>
+            <td align="center" style="background-color: #3B82F6; padding: 24px; text-align: center;">
+              <!-- Logo -->
+              <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td align="center" style="padding-bottom: 16px;">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="display: inline-block;">
+                      <path d="M12 4C7.58172 4 4 7.58172 4 12C4 16.4183 7.58172 20 12 20C16.4183 20 20 16.4183 20 12C20 7.58172 16.4183 4 12 4ZM2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12Z" fill="white"/>
+                      <path d="M15.8243 8.1757C16.0586 8.41005 16.0586 8.78995 15.8243 9.0243L10.8243 14.0243C10.5899 14.2586 10.2101 14.2586 9.97573 14.0243L8.17573 12.2243C7.94139 11.9899 7.94139 11.61 8.17573 11.3757C8.41006 11.1414 8.78996 11.1414 9.0243 11.3757L10.4 12.7514L14.9757 8.1757C15.2101 7.94137 15.5899 7.94137 15.8243 8.1757Z" fill="white"/>
+                    </svg>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center">
+                    <h1 style="color: white; font-size: 24px; font-weight: 700; margin: 0;">{{subject}}</h1>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <!-- Timestamp -->
+              <p style="color: #374151; font-size: 14px; margin-bottom: 24px;">Report generated on {{currentDate}}</p>
+              
+              <!-- Card -->
+              <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 24px;">
+                <tr>
+                  <td style="background-color: #F9FAFB; border-radius: 6px; padding: 16px;">
+                    <p style="margin: 0;">This report provides an overview of the health status of the monitored applications and services.</p>
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- Results Table -->
+              <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse: collapse; font-size: 14px; margin: 24px 0;">
+                <thead>
+                  <tr>
+                    <th style="background-color: #F3F4F6; padding: 12px 16px; text-align: left; font-weight: 600; color: #374151; border-top: 1px solid #E5E7EB; border-bottom: 1px solid #E5E7EB;">Service</th>
+                    <th style="background-color: #F3F4F6; padding: 12px 16px; text-align: left; font-weight: 600; color: #374151; border-top: 1px solid #E5E7EB; border-bottom: 1px solid #E5E7EB;">Type</th>
+                    <th style="background-color: #F3F4F6; padding: 12px 16px; text-align: left; font-weight: 600; color: #374151; border-top: 1px solid #E5E7EB; border-bottom: 1px solid #E5E7EB;">Status</th>
+                    <th style="background-color: #F3F4F6; padding: 12px 16px; text-align: left; font-weight: 600; color: #374151; border-top: 1px solid #E5E7EB; border-bottom: 1px solid #E5E7EB;">Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{#each results}}
+                  <tr style="{{#if @index}}{{#eq @index '%2'}}background-color: #F9FAFB;{{/eq}}{{/if}}">
+                    <td style="padding: 12px 16px; border-bottom: 1px solid #E5E7EB;">
+                      <strong>{{name}}</strong>
+                      {{#if severity}}
+                      <div style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; color: white; background-color: {{#eq severity 'critical'}}#EF4444{{else}}{{#eq severity 'high'}}#F59E0B{{else}}#D1D5DB{{/eq}}{{/eq}};">
+                        {{severity}}
+                      </div>
+                      {{/if}}
+                    </td>
+                    <td style="padding: 12px 16px; border-bottom: 1px solid #E5E7EB;">{{type}}</td>
+                    <td style="padding: 12px 16px; border-bottom: 1px solid #E5E7EB;">
+                      <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background-color: {{#eq status 'Healthy'}}#10B981{{else}}#EF4444{{/eq}};"></span>
+                      <span style="{{#eq status 'Healthy'}}color: #10B981; font-weight: 600;{{else}}color: #EF4444; font-weight: 600;{{/eq}}">{{status}}</span>
+                    </td>
+                    <td style="padding: 12px 16px; border-bottom: 1px solid #E5E7EB;">{{details}}</td>
+                  </tr>
+                  {{/each}}
+                </tbody>
+              </table>
+              
+              <!-- Unsubscribe Notice -->
+              {{#if unsubscribeMsg}}
+              <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 24px;">
+                <tr>
+                  <td style="background-color: #F9FAFB; border-radius: 6px; padding: 16px; font-size: 14px; color: #374151;">
+                    <p style="margin: 0;">{{unsubscribeMsg}}</p>
+                  </td>
+                </tr>
+              </table>
+              {{/if}}
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #F9FAFB; padding: 24px; text-align: center;">
+              <p style="color: #374151; font-size: 14px; margin-bottom: 8px;">&copy; {{formatDate currentDate 'YYYY'}} Health Check Service</p>
+              <p style="color: #374151; font-size: 14px; margin-bottom: 0;">This is an automated notification. Please do not reply to this email.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>

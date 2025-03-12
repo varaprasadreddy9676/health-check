@@ -1,0 +1,50 @@
+{
+  "healthChecks": [
+    {
+      "id": "67cfb65206ca3eb79387f1f3",
+      "name": "Server",
+      "type": "SERVER",
+      "enabled": true,
+      "createdAt": "2025-03-11T04:04:34.385Z",
+      "updatedAt": "2025-03-11T04:04:34.385Z",
+      "checkInterval": 1,
+      "notifyOnFailure": true
+    },
+    {
+      "id": "67cfdce373c39698e8033733",
+      "name": "DigiVisit server",
+      "type": "API",
+      "enabled": true,
+      "createdAt": "2025-03-11T06:49:07.364Z",
+      "updatedAt": "2025-03-11T06:54:11.726Z",
+      "checkInterval": 1,
+      "endpoint": "https://medicsprime.in/digivisit-server/hc",
+      "timeout": 5000,
+      "notifyOnFailure": true
+    },
+    {
+      "id": "67cfb65206ca3eb79387f222",
+      "name": "medics-care",
+      "type": "PROCESS",
+      "enabled": true,
+      "createdAt": "2025-03-11T04:04:34.385Z",
+      "updatedAt": "2025-03-11T04:04:34.385Z",
+      "checkInterval": 1,
+      "processKeyword": "medics-care",
+      "notifyOnFailure": true
+    },
+    {
+      "id": "67d08b46838bc67aa6ba6a97",
+      "name": "DigiVisit server2",
+      "type": "API",
+      "enabled": true,
+      "createdAt": "2025-03-11T06:49:07.364Z",
+      "updatedAt": "2025-03-11T06:54:11.726Z",
+      "checkInterval": 1,
+      "endpoint": "http://medicsprime.in/digivisit-server/hc",
+      "timeout": 5000,
+      "notifyOnFailure": true
+    }
+  ],
+  "timestamp": 1741756286552
+}

@@ -8,6 +8,7 @@ import axios from 'axios';
 import { getNotificationRepository } from '../repositories/factory';
 import { Subscription, CreateSubscriptionDto } from '../models/Subscription';
 import { HealthCheck } from '../models/HealthCheck';
+import juice from 'juice';
 
 // Define notification data structure
 interface HealthCheckNotificationData {
@@ -51,7 +52,11 @@ class NotificationService {
   // Initialize the email transporter
   private initializeEmailTransporter(): void {
     try {
+        console.log('Initializing email transporter', environment.SMTP_HOST, environment.SMTP_PORT, environment.SMTP_SECURE, environment.SMTP_USER, environment.SMTP_PASS);
+
+
       this.emailTransporter = nodemailer.createTransport({
+        service: environment.SMTP_SERVICE,
         host: environment.SMTP_HOST,
         port: environment.SMTP_PORT,
         secure: environment.SMTP_SECURE,
@@ -59,6 +64,12 @@ class NotificationService {
           user: environment.SMTP_USER,
           pass: environment.SMTP_PASS,
         },
+        pool: true,
+        maxConnections: 5,
+        maxMessages: 100,
+        tls: {
+            rejectUnauthorized: true
+        }
       });
       logger.info({
         msg: 'Email transporter initialized',
@@ -245,13 +256,19 @@ class NotificationService {
       const subject = data.isVerification
         ? `Verify your health check notification subscription for ${data.healthCheckName}`
         : `Subscription confirmed for ${data.healthCheckName} notifications`;
-      
+
+      const htmlWithInlineCSS = juice(htmlContent);
+
       // Send the email
       const result = await this.emailTransporter.sendMail({
         from: environment.EMAIL_FROM,
         to: data.email,
         subject,
         html: htmlContent,
+        alternatives: [{
+          contentType: 'text/html; charset=utf-8',
+          content: htmlWithInlineCSS
+        }]
       });
       
       // Log success
@@ -269,18 +286,17 @@ class NotificationService {
     }
   }
 
-  // Send health check notification (email and slack) - UPDATED TO USE SUBSCRIPTIONS
   async sendHealthCheckNotification(data: HealthCheckNotificationData): Promise<void> {
     try {
-      // Send email notification using subscriptions
+      console.log('Sending health check notification', JSON.stringify(data, null, 2));
       await this.sendTargetedEmailNotification(data);
-      
-      // Send Slack notification (unchanged)
       await this.sendSlackNotification(data);
     } catch (error) {
+      console.error('Complete notification error:', error);
       logger.error({
         msg: 'Failed to send health check notification',
         error: error instanceof Error ? error.message : String(error),
+        fullError: error
       });
     }
   }
@@ -341,6 +357,7 @@ class NotificationService {
           relevantResults = data.results.filter(r => r.healthCheckId === key);
         }
         
+        
         // Generate the email content
         const currentDate = new Date().toLocaleString();
         const htmlContent = template({
@@ -353,13 +370,19 @@ class NotificationService {
           unsubscribeMsg: 'To update your notification preferences or unsubscribe, click the link at the bottom of previous notification emails.'
         });
         
+        const htmlWithInlineCSS = juice(htmlContent);
+
         // Send the email
         const recipientsList = Array.from(recipients);
         const result = await this.emailTransporter.sendMail({
           from: environment.EMAIL_FROM,
           to: recipientsList.join(','),
           subject: data.subject,
-          html: htmlContent,
+          html: htmlWithInlineCSS,
+            alternatives: [{
+    contentType: 'text/html; charset=utf-8',
+    content: htmlContent
+  }]
         });
         
         // Log success
@@ -546,6 +569,25 @@ class NotificationService {
         id
       });
       throw error;
+    }
+  }
+
+  async getLatestNotification(): Promise<{ createdAt: Date } | null> {
+    try {
+      const notificationRepository = getNotificationRepository();
+      const { notifications } = await notificationRepository.findAll(1, 1);
+      
+      if (notifications && notifications.length > 0) {
+        return { createdAt: notifications[0].createdAt };
+      }
+      
+      return null;
+    } catch (error) {
+      logger.error({
+        msg: 'Error getting latest notification',
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
     }
   }
 }

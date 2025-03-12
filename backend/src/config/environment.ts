@@ -11,12 +11,13 @@ export const environment = {
   HOST: process.env.HOST || '0.0.0.0',
   
   // Database
-  DATABASE_TYPE: process.env.DATABASE_TYPE || 'postgresql', // 'postgresql' or 'mongodb'
+  DATABASE_TYPE: process.env.DATABASE_TYPE || 'mongodb', // 'postgresql' or 'mongodb'
   DATABASE_URL: process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/health_check_db?schema=public',
   MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/health_check_service',
   
   // Email settings
-  SMTP_HOST: process.env.SMTP_HOST || 'smtp.example.com',
+  SMTP_SERVICE: process.env.SMTP_SERVICE || 'gmail',
+  SMTP_HOST: process.env.SMTP_HOST || 'smtp.gmail.com',
   SMTP_PORT: parseInt(process.env.SMTP_PORT || '587', 10),
   SMTP_SECURE: process.env.SMTP_SECURE === 'true',
   SMTP_USER: process.env.SMTP_USER || '',

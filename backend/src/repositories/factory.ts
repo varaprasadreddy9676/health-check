@@ -221,10 +221,18 @@ export function getHealthCheckRepository(): HealthCheckRepository {
   return healthCheckRepository;
 }
 
+// In repositories/factory.ts
 export function getIncidentRepository(): IncidentRepository {
   if (!incidentRepository) {
+    console.error('CRITICAL: Incident repository is NOT initialized!');
     throw new Error('Database not initialized. Call initDatabases() first.');
   }
+  
+  // Add a log to verify the repository is being used
+  console.log('Incident Repository retrieved:', 
+    typeof incidentRepository.findAll === 'function' ? 'Valid Repository' : 'INVALID Repository'
+  );
+  
   return incidentRepository;
 }
 
