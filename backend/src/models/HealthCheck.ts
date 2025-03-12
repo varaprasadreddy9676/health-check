@@ -98,6 +98,7 @@ const healthCheckSchema = new Schema<IHealthCheck>({
 // Indexes
 healthCheckSchema.index({ type: 1 });
 healthCheckSchema.index({ enabled: 1 });
+healthCheckSchema.index({ name: 1, type: 1 }, { unique: true }); // Add unique compound index for name and type
 
 // Pre-save validation
 healthCheckSchema.pre('save', function(next) {

@@ -29,7 +29,7 @@ export class SchedulerService {
       }, 5 * 60 * 1000); // Refresh every 5 minutes
       
       this.isRunning = true;
-      logger.info('Health check scheduler started');
+      logger.info('--------Health check scheduler started----------');
     } catch (error) {
       logger.error({
         msg: 'Failed to start health check scheduler',
