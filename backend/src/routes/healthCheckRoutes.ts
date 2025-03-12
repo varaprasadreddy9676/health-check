@@ -1,24 +1,21 @@
 import { Router } from 'express';
 import { healthCheckController } from '../controllers/healthCheckController';
 
+// Create router
 const router = Router();
 
-// GET /api/healthchecks - Get all health checks
+// Health Check Routes
 router.get('/', healthCheckController.getAll);
-
-// POST /api/healthchecks - Create a new health check
 router.post('/', healthCheckController.validateHealthCheck, healthCheckController.create);
 
-// GET /api/healthchecks/:id - Get a health check by ID
+router.get('/metrics', healthCheckController.getMetrics);
+
 router.get('/:id', healthCheckController.getById);
-
-// PUT /api/healthchecks/:id - Update a health check
 router.put('/:id', healthCheckController.validateHealthCheck, healthCheckController.update);
-
-// DELETE /api/healthchecks/:id - Delete a health check
 router.delete('/:id', healthCheckController.delete);
 
-// PATCH /api/healthchecks/:id/toggle - Toggle a health check (enable/disable)
 router.patch('/:id/toggle', healthCheckController.toggle);
+router.post('/:id/force-check', healthCheckController.forceCheck);
+router.post('/:id/restart', healthCheckController.restartService);
 
 export default router;

@@ -1,595 +1,631 @@
-import nodemailer from 'nodemailer';
-import fs from 'fs';
-import path from 'path';
-import handlebars from 'handlebars';
+import { notificationRepository } from '../repositories/notificationRepository';
+import { sendEmail } from '../config/email';
+import { renderEmailTemplate, EMAIL_TEMPLATES } from '../utils/emailTemplates';
+import { env } from '../config/env';
+import { SeverityLevel, ISubscription } from '../models/Subscription';
+import { healthCheckRepository } from '../repositories/healthCheckRepository';
 import logger from '../utils/logger';
-import { environment } from '../config/environment';
-import axios from 'axios';
-import { getNotificationRepository } from '../repositories/factory';
-import { Subscription, CreateSubscriptionDto } from '../models/Subscription';
-import { HealthCheck } from '../models/HealthCheck';
-import juice from 'juice';
 
-// Define notification data structure
-interface HealthCheckNotificationData {
-  subject: string;
-  results: {
-    name: string;
-    type: string;
-    status: string;
-    details?: string;
-    lastChecked: string;
-    healthCheckId?: string; // Added to track which health check triggered the notification
-    severity?: string;      // Added to include severity information
-  }[];
-  hasFailures: boolean;
-  highResourceUsage?: boolean;
+// Alert data interface
+export interface HealthCheckAlertData {
+  healthCheckId: string;
+  name: string;
+  type: string;
+  status: string;
+  details: string;
+  cpuUsage?: number;
+  memoryUsage?: number;
+  responseTime?: number;
 }
 
-// Added for subscription verification and management
-interface SubscriptionEmailData {
-  verifyUrl?: string;
-  unsubscribeUrl?: string;
+// Subscription data interface
+export interface SubscriptionData {
   email: string;
+  healthCheckId?: string;
   healthCheckName?: string;
-  isVerification: boolean;
+  severity?: SeverityLevel;
 }
 
-class NotificationService {
-  private emailTransporter!: nodemailer.Transporter;
-  private emailTemplateCache: { [key: string]: handlebars.TemplateDelegate } = {};
-  private baseUrl: string;
+// Subscription response interface
+export interface SubscriptionResponse {
+  id: string;
+  email: string;
+  healthCheckId: string | null;
+  healthCheckName?: string;
+  active: boolean;
+  severity: SeverityLevel;
+  verified: boolean;
+}
 
-  constructor() {
-    // Initialize email transporter
-    this.initializeEmailTransporter();
-    // Register handlebars helpers
-    this.registerHandlebarsHelpers();
-    // Set base URL for verification links
-    this.baseUrl = environment.BASE_URL || 'http://localhost:3000';
-  }
-
-  // Initialize the email transporter
-  private initializeEmailTransporter(): void {
+// Notification service
+export class NotificationService {
+  /**
+   * Send health check alert
+   */
+  async sendHealthCheckAlert(data: HealthCheckAlertData): Promise<boolean> {
     try {
-        console.log('Initializing email transporter', environment.SMTP_HOST, environment.SMTP_PORT, environment.SMTP_SECURE, environment.SMTP_USER, environment.SMTP_PASS);
-
-
-      this.emailTransporter = nodemailer.createTransport({
-        service: environment.SMTP_SERVICE,
-        host: environment.SMTP_HOST,
-        port: environment.SMTP_PORT,
-        secure: environment.SMTP_SECURE,
-        auth: {
-          user: environment.SMTP_USER,
-          pass: environment.SMTP_PASS,
-        },
-        pool: true,
-        maxConnections: 5,
-        maxMessages: 100,
-        tls: {
-            rejectUnauthorized: true
-        }
-      });
-      logger.info({
-        msg: 'Email transporter initialized',
-        host: environment.SMTP_HOST,
-        port: environment.SMTP_PORT,
-      });
-    } catch (error) {
-      logger.error({
-        msg: 'Failed to initialize email transporter',
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  // Register handlebars helpers
-  private registerHandlebarsHelpers(): void {
-    handlebars.registerHelper('eq', function (a, b) {
-      return a === b;
-    });
-    
-    handlebars.registerHelper('formatDate', function (date) {
-      if (!date) return '';
-      return new Date(date).toLocaleString();
-    });
-    
-    handlebars.registerHelper('getSeverityClass', function (severity) {
-      switch (severity) {
-        case 'critical': return 'critical';
-        case 'high': return 'high';
-        case 'medium': return 'medium';
-        case 'low': return 'low';
-        default: return '';
+      // Check if we should throttle this notification
+      const shouldThrottle = await notificationRepository.shouldThrottleEmail();
+      if (shouldThrottle) {
+        logger.info({
+          msg: 'Email notification throttled',
+          healthCheckId: data.healthCheckId,
+          name: data.name
+        });
+        return false;
       }
-    });
-  }
-
-  // Load email template
-  private loadEmailTemplate(templateName: string): handlebars.TemplateDelegate {
-    if (this.emailTemplateCache[templateName]) {
-      return this.emailTemplateCache[templateName];
-    }
-    try {
-      const templatePath = path.resolve(process.cwd(), 'src/templates', `${templateName}.html`);
-      const templateSource = fs.readFileSync(templatePath, 'utf8');
-      const template = handlebars.compile(templateSource);
-      this.emailTemplateCache[templateName] = template;
-      return template;
-    } catch (error) {
-      logger.error({
-        msg: `Failed to load email template: ${templateName}`,
-        error: error instanceof Error ? error.message : String(error),
+      
+      // Determine severity
+      let severity = 'high';
+      if (data.type === 'SERVER' || data.responseTime && data.responseTime > 10000) {
+        severity = 'critical';
+      }
+      
+      // Get specific and global subscribers
+      const [specificSubscribers, globalSubscribers, emailConfig] = await Promise.all([
+        notificationRepository.getSubscribersForHealthCheck(data.healthCheckId, severity),
+        notificationRepository.getGlobalSubscribers(severity),
+        notificationRepository.getEmailConfig()
+      ]);
+      
+      // Combine unique subscribers
+      const allSubscribers = [...new Set([...specificSubscribers, ...globalSubscribers])];
+      
+      // If no subscribers are configured, use the default email config
+      let recipientsList = allSubscribers;
+      if (recipientsList.length === 0 && emailConfig.enabled && emailConfig.recipients.length > 0) {
+        recipientsList = emailConfig.recipients;
+      }
+      
+      // If still no recipients, log and return
+      if (recipientsList.length === 0) {
+        logger.info({
+          msg: 'No recipients configured for notification',
+          healthCheckId: data.healthCheckId,
+          name: data.name
+        });
+        return false;
+      }
+      
+      // Render email template
+      const subject = `Health Check Alert: ${data.name} is ${data.status}`;
+      const html = renderEmailTemplate(EMAIL_TEMPLATES.HEALTH_CHECK_ALERT, {
+        subject,
+        results: [
+          {
+            name: data.name,
+            type: data.type,
+            status: data.status,
+            details: data.details,
+            cpuUsage: data.cpuUsage,
+            memoryUsage: data.memoryUsage,
+            responseTime: data.responseTime
+          }
+        ],
+        timestamp: new Date(),
+        currentYear: new Date().getFullYear()
       });
-      // Return a simple template as fallback
-      const fallbackTemplate = handlebars.compile('<h1>{{subject}}</h1><pre>{{JSON.stringify data}}</pre>');
-      this.emailTemplateCache[templateName] = fallbackTemplate;
-      return fallbackTemplate;
+      
+      // Send email
+      const emailSent = await sendEmail(recipientsList, subject, html);
+      
+      if (emailSent) {
+        // Record notification
+        await notificationRepository.createNotification({
+          type: 'email',
+          subject,
+          content: html,
+          recipients: recipientsList,
+          status: 'sent'
+        });
+        
+        // Update last sent time
+        await notificationRepository.updateLastSentTime();
+        
+        logger.info({
+          msg: 'Health check alert email sent',
+          healthCheckId: data.healthCheckId,
+          name: data.name,
+          recipients: recipientsList.length
+        });
+        return true;
+      } else {
+        // Record failed notification
+        await notificationRepository.createNotification({
+          type: 'email',
+          subject,
+          content: html,
+          recipients: recipientsList,
+          status: 'failed'
+        });
+        
+        logger.error({
+          msg: 'Failed to send health check alert email',
+          healthCheckId: data.healthCheckId,
+          name: data.name
+        });
+        return false;
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error({
+        msg: 'Error sending health check alert',
+        error: errorMessage,
+        healthCheckId: data.healthCheckId,
+        name: data.name
+      });
+      return false;
     }
   }
-
-  // Create a subscription
-  async createSubscription(data: CreateSubscriptionDto): Promise<Subscription> {
+  
+  /**
+   * Create subscription
+   */
+  async createSubscription(data: SubscriptionData): Promise<SubscriptionResponse> {
     try {
-      const notificationRepository = getNotificationRepository();
+      let healthCheckName = data.healthCheckName || 'All health checks';
       
-      // Create subscription
-      const subscription = await notificationRepository.createSubscription(data);
-      
-      // If healthCheckId is provided, get the health check info
-      let healthCheckName = 'All health checks';
-      if (data.healthCheckId) {
-        const healthCheck = await this.getHealthCheckInfo(data.healthCheckId);
+      // If we have a healthCheckId but no name, try to fetch it
+      if (data.healthCheckId && !data.healthCheckName) {
+        const healthCheck = await healthCheckRepository.findById(data.healthCheckId);
         if (healthCheck) {
           healthCheckName = healthCheck.name;
         }
       }
       
-      // Send verification email if not already verified
-      if (!subscription.verifiedAt && subscription.verifyToken) {
-        await this.sendSubscriptionEmail({
-          verifyUrl: `${this.baseUrl}/api/notifications/subscriptions/verify/${subscription.verifyToken}`,
-          unsubscribeUrl: `${this.baseUrl}/api/notifications/subscriptions/unsubscribe/${subscription.unsubscribeToken}`,
-          email: subscription.email,
-          healthCheckName,
-          isVerification: true
-        });
+      // Create subscription in database
+      const subscription = await notificationRepository.createSubscription(
+        data.email,
+        data.healthCheckId,
+        data.severity
+      );
+      
+      // If not verified, send verification email
+      if (!subscription.verifiedAt) {
+        await this.sendVerificationEmail(
+          subscription.email,
+          subscription.verifyToken!,
+          subscription.unsubscribeToken,
+          healthCheckName
+        );
       }
       
-      return subscription;
+      logger.info({
+        msg: 'Subscription created',
+        email: data.email,
+        healthCheckId: data.healthCheckId,
+        verified: !!subscription.verifiedAt
+      });
+      
+      return {
+        id: subscription.id,
+        email: subscription.email,
+        healthCheckId: subscription.healthCheckId ? subscription.healthCheckId.toString() : null,
+        healthCheckName,
+        active: subscription.active,
+        severity: subscription.severity,
+        verified: !!subscription.verifiedAt
+      };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
-        msg: 'Failed to create subscription',
-        error: error instanceof Error ? error.message : String(error),
-        data
+        msg: 'Error creating subscription',
+        error: errorMessage,
+        email: data.email,
+        healthCheckId: data.healthCheckId
       });
       throw error;
     }
   }
-
-  // Verify a subscription
-  async verifySubscription(token: string): Promise<Subscription | null> {
+  
+  /**
+   * Send verification email
+   */
+  private async sendVerificationEmail(
+    email: string,
+    verifyToken: string,
+    unsubscribeToken: string,
+    healthCheckName: string
+  ): Promise<boolean> {
     try {
-      const notificationRepository = getNotificationRepository();
+      const verifyUrl = `${env.BASE_URL}/api/notifications/subscriptions/verify/${verifyToken}`;
+      const unsubscribeUrl = `${env.BASE_URL}/api/notifications/subscriptions/unsubscribe/${unsubscribeToken}`;
+      
+      const subject = `Verify Your Health Check Subscription`;
+      const html = renderEmailTemplate(EMAIL_TEMPLATES.SUBSCRIPTION_VERIFICATION, {
+        verifyUrl,
+        unsubscribeUrl,
+        healthCheckName,
+        email,
+        currentYear: new Date().getFullYear()
+      });
+      
+      const emailSent = await sendEmail(email, subject, html);
+      
+      if (emailSent) {
+        await notificationRepository.createNotification({
+          type: 'email',
+          subject,
+          content: html,
+          recipients: [email],
+          status: 'sent'
+        });
+        
+        logger.info({
+          msg: 'Subscription verification email sent',
+          email
+        });
+        return true;
+      } else {
+        await notificationRepository.createNotification({
+          type: 'email',
+          subject,
+          content: html,
+          recipients: [email],
+          status: 'failed'
+        });
+        
+        logger.error({
+          msg: 'Failed to send subscription verification email',
+          email
+        });
+        return false;
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error({
+        msg: 'Error sending verification email',
+        error: errorMessage,
+        email
+      });
+      return false;
+    }
+  }
+  
+  /**
+   * Verify subscription
+   */
+  async verifySubscription(token: string): Promise<SubscriptionResponse | null> {
+    try {
       const subscription = await notificationRepository.verifySubscription(token);
       
-      if (subscription) {
-        // Get health check name
-        let healthCheckName = 'All health checks';
+      if (!subscription) {
+        return null;
+      }
+      
+      // Get health check name
+      let healthCheckName = 'All health checks';
+      
+      try {
         if (subscription.healthCheckId) {
-          const healthCheck = await this.getHealthCheckInfo(subscription.healthCheckId);
+          const healthCheck = await healthCheckRepository.findById(
+            typeof subscription.healthCheckId === 'string' 
+              ? subscription.healthCheckId 
+              : subscription.healthCheckId.toString()
+          );
+          
           if (healthCheck) {
             healthCheckName = healthCheck.name;
           }
         }
-        
-        // Send confirmation email
-        await this.sendSubscriptionEmail({
-          unsubscribeUrl: `${this.baseUrl}/api/notifications/subscriptions/unsubscribe/${subscription.unsubscribeToken}`,
-          email: subscription.email,
-          healthCheckName,
-          isVerification: false
+      } catch (error) {
+        logger.warn({
+          msg: 'Error fetching health check name for subscription',
+          error: error instanceof Error ? error.message : String(error),
+          subscriptionId: subscription.id
         });
       }
       
-      return subscription;
-    } catch (error) {
-      logger.error({
-        msg: 'Failed to verify subscription',
-        error: error instanceof Error ? error.message : String(error),
-        token
-      });
-      throw error;
-    }
-  }
-
-  // Unsubscribe
-  async unsubscribe(token: string): Promise<Subscription | null> {
-    try {
-      const notificationRepository = getNotificationRepository();
-      return notificationRepository.unsubscribe(token);
-    } catch (error) {
-      logger.error({
-        msg: 'Failed to unsubscribe',
-        error: error instanceof Error ? error.message : String(error),
-        token
-      });
-      throw error;
-    }
-  }
-
-  // Get health check info
-  private async getHealthCheckInfo(healthCheckId: string): Promise<HealthCheck | null> {
-    try {
-      const healthCheckRepository = getNotificationRepository();
-      // This would need to be implemented properly to use the health check repository
-      // For now, we'll just return null
-      return null;
-    } catch (error) {
-      logger.error({
-        msg: 'Failed to get health check info',
-        error: error instanceof Error ? error.message : String(error),
-        healthCheckId
-      });
-      return null;
-    }
-  }
-
-  // Send subscription verification or confirmation email
-  private async sendSubscriptionEmail(data: SubscriptionEmailData): Promise<void> {
-    try {
-      // Load the appropriate template
-      const templateName = data.isVerification ? 'subscriptionVerifyEmail' : 'subscriptionConfirmEmail';
-      const template = this.loadEmailTemplate(templateName);
+      // Send confirmation email
+      await this.sendConfirmationEmail(
+        subscription.email,
+        subscription.unsubscribeToken,
+        healthCheckName
+      );
       
-      // Generate the email content
-      const htmlContent = template({
-        email: data.email,
-        healthCheckName: data.healthCheckName || 'All health checks',
-        verifyUrl: data.verifyUrl,
-        unsubscribeUrl: data.unsubscribeUrl,
-        currentDate: new Date().toLocaleString()
-      });
-      
-      // Subject line
-      const subject = data.isVerification
-        ? `Verify your health check notification subscription for ${data.healthCheckName}`
-        : `Subscription confirmed for ${data.healthCheckName} notifications`;
-
-      const htmlWithInlineCSS = juice(htmlContent);
-
-      // Send the email
-      const result = await this.emailTransporter.sendMail({
-        from: environment.EMAIL_FROM,
-        to: data.email,
-        subject,
-        html: htmlContent,
-        alternatives: [{
-          contentType: 'text/html; charset=utf-8',
-          content: htmlWithInlineCSS
-        }]
-      });
-      
-      // Log success
       logger.info({
-        msg: `Subscription ${data.isVerification ? 'verification' : 'confirmation'} email sent`,
-        messageId: result.messageId,
-        recipient: data.email,
+        msg: 'Subscription verified',
+        id: subscription.id,
+        email: subscription.email
       });
+      
+      return {
+        id: subscription.id,
+        email: subscription.email,
+        healthCheckId: subscription.healthCheckId ? 
+          (typeof subscription.healthCheckId === 'string' 
+            ? subscription.healthCheckId 
+            : subscription.healthCheckId.toString()) 
+          : null,
+        healthCheckName,
+        active: subscription.active,
+        severity: subscription.severity,
+        verified: true
+      };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
-        msg: `Failed to send subscription ${data.isVerification ? 'verification' : 'confirmation'} email`,
-        error: error instanceof Error ? error.message : String(error),
-        email: data.email,
+        msg: 'Error verifying subscription',
+        error: errorMessage,
+        token
       });
-    }
-  }
-
-  async sendHealthCheckNotification(data: HealthCheckNotificationData): Promise<void> {
-    try {
-      console.log('Sending health check notification', JSON.stringify(data, null, 2));
-      await this.sendTargetedEmailNotification(data);
-      await this.sendSlackNotification(data);
-    } catch (error) {
-      console.error('Complete notification error:', error);
-      logger.error({
-        msg: 'Failed to send health check notification',
-        error: error instanceof Error ? error.message : String(error),
-        fullError: error
-      });
-    }
-  }
-
-  // Send targeted email notification based on subscriptions - NEW METHOD
-  private async sendTargetedEmailNotification(data: HealthCheckNotificationData): Promise<void> {
-    try {
-      const notificationRepository = getNotificationRepository();
-      
-      // Determine the severity for notifications
-      const severity = this.determineSeverity(data);
-      
-      // Collect recipients for each unhealthy health check
-      const targetedRecipients: Map<string, Set<string>> = new Map();
-      
-      // Add global subscribers (those who want ALL notifications)
-      const globalSubscribers = await notificationRepository.getSubscribersForAllHealthChecks(severity);
-      if (globalSubscribers.length > 0) {
-        targetedRecipients.set('global', new Set(globalSubscribers));
-      }
-      
-      // Get subscribers for specific health checks
-      for (const result of data.results) {
-        if (result.healthCheckId && result.status === 'Unhealthy') {
-          const subscribers = await notificationRepository.getSubscribersForHealthCheck(
-            result.healthCheckId,
-            severity
-          );
-          
-          if (subscribers.length > 0) {
-            targetedRecipients.set(result.healthCheckId, new Set(subscribers));
-          }
-        }
-      }
-      
-      // If no subscribers found, fallback to default email config
-      if (targetedRecipients.size === 0) {
-        const emailConfig = await notificationRepository.getEmailConfig();
-        if (emailConfig && emailConfig.enabled && emailConfig.recipients.length > 0) {
-          targetedRecipients.set('default', new Set(emailConfig.recipients));
-        } else {
-          logger.info({ msg: 'No subscribers for this notification, skipping email' });
-          return;
-        }
-      }
-      
-      // Load the template
-      const template = this.loadEmailTemplate('healthCheckEmail');
-      
-      // Send targeted emails
-      for (const [key, recipients] of targetedRecipients.entries()) {
-        if (recipients.size === 0) continue;
-        
-        // Filter results based on subscription type
-        let relevantResults = [...data.results];
-        if (key !== 'global' && key !== 'default') {
-          // For specific health check subscribers, only include that health check
-          relevantResults = data.results.filter(r => r.healthCheckId === key);
-        }
-        
-        
-        // Generate the email content
-        const currentDate = new Date().toLocaleString();
-        const htmlContent = template({
-          results: relevantResults,
-          currentDate,
-          subject: data.subject,
-          hasFailures: data.hasFailures,
-          highResourceUsage: data.highResourceUsage,
-          // Add unsubscribe instruction at the bottom
-          unsubscribeMsg: 'To update your notification preferences or unsubscribe, click the link at the bottom of previous notification emails.'
-        });
-        
-        const htmlWithInlineCSS = juice(htmlContent);
-
-        // Send the email
-        const recipientsList = Array.from(recipients);
-        const result = await this.emailTransporter.sendMail({
-          from: environment.EMAIL_FROM,
-          to: recipientsList.join(','),
-          subject: data.subject,
-          html: htmlWithInlineCSS,
-            alternatives: [{
-    contentType: 'text/html; charset=utf-8',
-    content: htmlContent
-  }]
-        });
-        
-        // Log success
-        logger.info({
-          msg: 'Targeted email notification sent',
-          messageId: result.messageId,
-          recipients: recipientsList,
-          subscriptionType: key === 'global' ? 'global' : (key === 'default' ? 'default' : 'specific'),
-        });
-        
-        // Save to database
-        await notificationRepository.create({
-          type: 'email',
-          subject: data.subject,
-          content: htmlContent,
-          recipients: recipientsList,
-          status: 'sent',
-          createdAt: new Date(),
-        });
-      }
-    } catch (error) {
-      logger.error({
-        msg: 'Failed to send targeted email notification',
-        error: error instanceof Error ? error.message : String(error),
-      });
-      const notificationRepository = getNotificationRepository();
-      // Save failure to database
-      await notificationRepository.create({
-        type: 'email',
-        subject: data.subject,
-        content: 'Failed to send email',
-        recipients: [],
-        status: 'failed',
-        createdAt: new Date(),
-      });
+      throw error;
     }
   }
   
-  // Helper method to determine severity based on notification data
-  private determineSeverity(data: HealthCheckNotificationData): string {
-    // If any result has an explicit severity, use the highest one
-    const explicitSeverities = data.results
-      .filter(r => r.severity)
-      .map(r => r.severity);
-    
-    if (explicitSeverities.includes('critical')) return 'critical';
-    if (explicitSeverities.includes('high')) return 'high';
-    
-    // Otherwise determine based on number of failures
-    if (data.results.filter(r => r.status === 'Unhealthy').length > 3) {
-      return 'critical';
-    } else if (data.hasFailures) {
-      return 'high';
-    }
-    
-    return 'all';
-  }
-
-  // Send Slack notification (unchanged from original)
-  private async sendSlackNotification(data: HealthCheckNotificationData): Promise<void> {
+  /**
+   * Send confirmation email
+   */
+  private async sendConfirmationEmail(
+    email: string,
+    unsubscribeToken: string,
+    healthCheckName: string
+  ): Promise<boolean> {
     try {
-      const notificationRepository = getNotificationRepository();
-      // Get Slack configuration
-      const slackConfig = await notificationRepository.getSlackConfig();
-      // Skip if Slack is disabled or webhookUrl is not set
-      if (!slackConfig || !slackConfig.enabled || !slackConfig.webhookUrl) {
-        logger.info({ msg: 'Slack notifications are disabled, skipping' });
-        return;
-      }
-      // Create Slack message
-      const message = this.createSlackMessage(data);
-      // Send the message
-      const response = await axios.post(slackConfig.webhookUrl, message);
-      // Check if successful
-      if (response.status === 200) {
-        logger.info({ msg: 'Slack notification sent' });
-        // Save to database
-        await notificationRepository.create({
-          type: 'slack',
-          subject: data.subject,
-          content: JSON.stringify(message),
-          recipients: slackConfig.channel ? [slackConfig.channel] : [],
-          status: 'sent',
-          createdAt: new Date(),
+      const unsubscribeUrl = `${env.BASE_URL}/api/notifications/subscriptions/unsubscribe/${unsubscribeToken}`;
+      
+      const subject = `Subscription Confirmed`;
+      const html = renderEmailTemplate(EMAIL_TEMPLATES.SUBSCRIPTION_CONFIRMED, {
+        unsubscribeUrl,
+        healthCheckName,
+        email,
+        currentYear: new Date().getFullYear()
+      });
+      
+      const emailSent = await sendEmail(email, subject, html);
+      
+      if (emailSent) {
+        await notificationRepository.createNotification({
+          type: 'email',
+          subject,
+          content: html,
+          recipients: [email],
+          status: 'sent'
         });
+        
+        logger.info({
+          msg: 'Subscription confirmation email sent',
+          email
+        });
+        return true;
       } else {
-        throw new Error(`Slack API returned status code ${response.status}`);
+        await notificationRepository.createNotification({
+          type: 'email',
+          subject,
+          content: html,
+          recipients: [email],
+          status: 'failed'
+        });
+        
+        logger.error({
+          msg: 'Failed to send subscription confirmation email',
+          email
+        });
+        return false;
       }
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
-        msg: 'Failed to send Slack notification',
-        error: error instanceof Error ? error.message : String(error),
+        msg: 'Error sending confirmation email',
+        error: errorMessage,
+        email
       });
-      const notificationRepository = getNotificationRepository();
-      // Save failure to database
-      await notificationRepository.create({
-        type: 'slack',
-        subject: data.subject,
-        content: 'Failed to send Slack notification',
-        recipients: [],
-        status: 'failed',
-        createdAt: new Date(),
-      });
+      return false;
     }
   }
-
-  // Create Slack message (unchanged from original)
-  private createSlackMessage(data: HealthCheckNotificationData): any {
-    const blocks = [
-      {
-        type: 'header',
-        text: {
-          type: 'plain_text',
-          text: data.subject,
-          emoji: true
-        }
-      },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `*Time:* ${new Date().toLocaleString()}`
-        }
-      },
-      {
-        type: 'divider'
-      }
-    ];
-    // Add blocks for each unhealthy service
-    data.results.forEach(result => {
-      blocks.push({
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `*${result.name}* (${result.type})\n*Status:* ${result.status}\n*Details:* ${result.details || 'No details provided'}`
-        }
-      });
-    });
-    return {
-      blocks
-    };
-  }
-
-  // Get all subscriptions for an email
-  async getSubscriptionsByEmail(email: string): Promise<Subscription[]> {
+  
+  /**
+   * Unsubscribe
+   */
+  async unsubscribe(token: string): Promise<SubscriptionResponse | null> {
     try {
-      const notificationRepository = getNotificationRepository();
-      return notificationRepository.findSubscriptionsByEmail(email);
+      const subscription = await notificationRepository.unsubscribe(token);
+      
+      if (!subscription) {
+        return null;
+      }
+      
+      // Get health check name
+      let healthCheckName = 'All health checks';
+      
+      try {
+        if (subscription.healthCheckId) {
+          const healthCheck = await healthCheckRepository.findById(
+            typeof subscription.healthCheckId === 'string' 
+              ? subscription.healthCheckId 
+              : subscription.healthCheckId.toString()
+          );
+          
+          if (healthCheck) {
+            healthCheckName = healthCheck.name;
+          }
+        }
+      } catch (error) {
+        logger.warn({
+          msg: 'Error fetching health check name for unsubscription',
+          error: error instanceof Error ? error.message : String(error),
+          subscriptionId: subscription.id
+        });
+      }
+      
+      logger.info({
+        msg: 'Subscription unsubscribed',
+        id: subscription.id,
+        email: subscription.email
+      });
+      
+      return {
+        id: subscription.id,
+        email: subscription.email,
+        healthCheckId: subscription.healthCheckId ? 
+          (typeof subscription.healthCheckId === 'string' 
+            ? subscription.healthCheckId 
+            : subscription.healthCheckId.toString()) 
+          : null,
+        healthCheckName,
+        active: subscription.active,
+        severity: subscription.severity,
+        verified: !!subscription.verifiedAt
+      };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
-        msg: 'Failed to get subscriptions by email',
-        error: error instanceof Error ? error.message : String(error),
-        email
+        msg: 'Error unsubscribing',
+        error: errorMessage,
+        token
       });
       throw error;
     }
   }
-
-  // Update a subscription
-  async updateSubscription(id: string, data: { active?: boolean; severity?: 'all' | 'high' | 'critical' }): Promise<Subscription> {
+  
+  /**
+   * Update subscription
+   */
+  async updateSubscription(id: string, data: { active?: boolean; severity?: SeverityLevel }): Promise<SubscriptionResponse | null> {
     try {
-      const notificationRepository = getNotificationRepository();
-      return notificationRepository.updateSubscription(id, data);
+      const subscription = await notificationRepository.updateSubscription(id, data);
+      
+      if (!subscription) {
+        return null;
+      }
+      
+      // Get health check name
+      let healthCheckName = 'All health checks';
+      
+      try {
+        if (subscription.healthCheckId) {
+          const healthCheck = await healthCheckRepository.findById(
+            typeof subscription.healthCheckId === 'string' 
+              ? subscription.healthCheckId 
+              : subscription.healthCheckId.toString()
+          );
+          
+          if (healthCheck) {
+            healthCheckName = healthCheck.name;
+          }
+        }
+      } catch (error) {
+        logger.warn({
+          msg: 'Error fetching health check name for subscription update',
+          error: error instanceof Error ? error.message : String(error),
+          subscriptionId: subscription.id
+        });
+      }
+      
+      logger.info({
+        msg: 'Subscription updated',
+        id,
+        data
+      });
+      
+      return {
+        id: subscription.id,
+        email: subscription.email,
+        healthCheckId: subscription.healthCheckId ? 
+          (typeof subscription.healthCheckId === 'string' 
+            ? subscription.healthCheckId 
+            : subscription.healthCheckId.toString()) 
+          : null,
+        healthCheckName,
+        active: subscription.active,
+        severity: subscription.severity,
+        verified: !!subscription.verifiedAt
+      };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
-        msg: 'Failed to update subscription',
-        error: error instanceof Error ? error.message : String(error),
+        msg: 'Error updating subscription',
+        error: errorMessage,
         id,
         data
       });
       throw error;
     }
   }
-
-  // Delete a subscription
+  
+  /**
+   * Delete subscription
+   */
   async deleteSubscription(id: string): Promise<boolean> {
     try {
-      const notificationRepository = getNotificationRepository();
-      return notificationRepository.deleteSubscription(id);
+      const success = await notificationRepository.deleteSubscription(id);
+      
+      logger.info({
+        msg: 'Subscription deleted',
+        id,
+        success
+      });
+      
+      return success;
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
-        msg: 'Failed to delete subscription',
-        error: error instanceof Error ? error.message : String(error),
+        msg: 'Error deleting subscription',
+        error: errorMessage,
         id
       });
       throw error;
     }
   }
-
-  async getLatestNotification(): Promise<{ createdAt: Date } | null> {
+  
+  /**
+   * Get subscriptions by email
+   */
+  async getSubscriptionsByEmail(email: string): Promise<SubscriptionResponse[]> {
     try {
-      const notificationRepository = getNotificationRepository();
-      const { notifications } = await notificationRepository.findAll(1, 1);
+      const subscriptions = await notificationRepository.getSubscriptionsByEmail(email);
       
-      if (notifications && notifications.length > 0) {
-        return { createdAt: notifications[0].createdAt };
-      }
-      
-      return null;
+      // Map to response format with proper typing for health check name
+      return Promise.all(subscriptions.map(async (sub) => {
+        let healthCheckName = 'All health checks';
+        
+        try {
+          if (sub.healthCheckId) {
+            // Handle both string and ObjectId types safely
+            const healthCheckIdStr = typeof sub.healthCheckId === 'string' 
+              ? sub.healthCheckId 
+              : sub.healthCheckId.toString();
+              
+            // Try to get the health check from repository
+            const healthCheck = await healthCheckRepository.findById(healthCheckIdStr);
+            
+            if (healthCheck) {
+              healthCheckName = healthCheck.name;
+            }
+          }
+        } catch (error) {
+          logger.warn({
+            msg: 'Error fetching health check name for subscription list',
+            error: error instanceof Error ? error.message : String(error),
+            subscriptionId: sub.id
+          });
+        }
+        
+        return {
+          id: sub.id,
+          email: sub.email,
+          healthCheckId: sub.healthCheckId ? 
+            (typeof sub.healthCheckId === 'string' 
+              ? sub.healthCheckId 
+              : sub.healthCheckId.toString()) 
+            : null,
+          healthCheckName,
+          active: sub.active,
+          severity: sub.severity,
+          verified: !!sub.verifiedAt
+        };
+      }));
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
-        msg: 'Error getting latest notification',
-        error: error instanceof Error ? error.message : String(error)
+        msg: 'Error getting subscriptions by email',
+        error: errorMessage,
+        email
       });
-      return null;
+      throw error;
     }
   }
 }
 
+// Export singleton instance
 export const notificationService = new NotificationService();

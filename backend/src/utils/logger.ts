@@ -1,21 +1,28 @@
 import pino from 'pino';
-import { environment } from '../config/environment';
+import { env } from '../config/env';
 
-const transport = pino.transport({
-  target: 'pino-pretty',
-  options: {
-    colorize: true,
-    translateTime: 'SYS:standard',
-    ignore: 'pid,hostname',
+// Configure pino logger
+const logger = pino({
+  level: env.LOG_LEVEL,
+  transport: env.NODE_ENV !== 'production'
+    ? {
+        target: 'pino-pretty',
+        options: {
+          colorize: true,
+          translateTime: 'SYS:standard',
+          ignore: 'pid,hostname',
+        },
+      }
+    : undefined,
+  // Base properties for every log message
+  base: {
+    env: env.NODE_ENV,
+  },
+  // Default serializers
+  serializers: {
+    err: pino.stdSerializers.err,
+    error: pino.stdSerializers.err,
   },
 });
-
-const logger = pino(
-  {
-    level: environment.LOG_LEVEL || 'info',
-    base: undefined,
-  },
-  environment.NODE_ENV === 'production' ? undefined : transport
-);
 
 export default logger;

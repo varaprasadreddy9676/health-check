@@ -1,27 +1,20 @@
 import { Router } from 'express';
 import healthCheckRoutes from './healthCheckRoutes';
-import healthCheckResultRoutes from './healthCheckResultRoutes';
-import incidentRoutes from './incidentRoutes';
+import resultRoutes from './resultRoutes';
 import notificationRoutes from './notificationRoutes';
-import actionRoutes from './actionRoutes';
 import statusRoutes from './statusRoutes';
-import { selfMonitoringController } from '../controllers/selfMonitoringController';
+import { statusController } from '../controllers/statusController';
 
+// Create main router
 const router = Router();
 
-// API Routes
+// Mount routes
 router.use('/healthchecks', healthCheckRoutes);
-router.use('/results', healthCheckResultRoutes);
-router.use('/incidents', incidentRoutes);
+router.use('/results', resultRoutes);
 router.use('/notifications', notificationRoutes);
-router.use('/actions', actionRoutes);
 router.use('/status', statusRoutes);
 
-// Health endpoint for the API itself (always available even if DB is down)
-router.get('/health', selfMonitoringController.getHealth);
-
-// System status endpoint
-router.get('/system-status', selfMonitoringController.getStatus);
-
+// System health endpoint at the root API level
+router.get('/health', statusController.getHealth);
 
 export default router;

@@ -1,78 +1,67 @@
 import app from './app';
-import { environment } from './config/environment';
+import { env, validateEnv } from './config/env';
+import { connectDB } from './config/db';
+import { verifyEmailConfig } from './config/email';
+import { createTemplateFiles } from './utils/emailTemplates';
+import { schedulerService } from './services/schedulerService';
 import logger from './utils/logger';
-import { healthCheckScheduler } from './jobs/healthCheckScheduler';
-import { initializeDatabase, closeDatabase } from './config/database';
-import { selfMonitoringService } from './services/selfMonitoringService';
+
+// Validate environment variables
+validateEnv();
 
 // Start the server
 const startServer = async () => {
   try {
-    // Start self-monitoring service first
-    await selfMonitoringService.start();
-    logger.info('Self-monitoring service started');
+    // Create email templates
+    createTemplateFiles();
     
-    // Try to connect to the database (but continue even if it fails)
-    try {
-      await initializeDatabase();
-      logger.info('Connected to database');
-    } catch (error) {
-      logger.error({
-        msg: 'Failed to connect to database, starting in fallback mode',
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // We continue anyway - the application will use in-memory fallbacks
-    }
+    // Connect to database
+    await connectDB();
+    logger.info('Connected to MongoDB');
     
-    // Start the HTTP server
-    const server = app.listen(environment.PORT, environment.HOST, () => {
-      logger.info({
-        msg: `Server started`,
-        host: environment.HOST,
-        port: environment.PORT,
-        env: environment.NODE_ENV,
-      });
+    // Verify email configuration
+    const emailConfigured = await verifyEmailConfig();
+    logger.info(`Email service ${emailConfigured ? 'configured' : 'not configured properly'}`);
+    
+    // Create HTTP server
+    const server = app.listen(env.PORT, env.HOST, () => {
+      logger.info(`Server started on ${env.HOST}:${env.PORT} in ${env.NODE_ENV} mode`);
     });
     
-    // Start the health check scheduler
-    await healthCheckScheduler.start();
+    // Start health check scheduler
+    await schedulerService.start();
+    logger.info('Health check scheduler started');
     
     // Handle graceful shutdown
     const gracefulShutdown = async (signal: string) => {
-      logger.info({
-        msg: `${signal} received, starting graceful shutdown`,
-      });
+      logger.info(`${signal} received, starting graceful shutdown`);
       
-      // Close the HTTP server
+      // Stop the scheduler
+      schedulerService.stop();
+      logger.info('Health check scheduler stopped');
+      
+      // Close server
       server.close(() => {
         logger.info('HTTP server closed');
       });
       
-      // Try to disconnect from the database
-      try {
-        await closeDatabase();
-        logger.info('Database connection closed');
-      } catch (error) {
-        logger.error({
-          msg: 'Error closing database connection',
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      
-      // Exit the process
-      process.exit(0);
+      // Exit process
+      setTimeout(() => {
+        logger.info('Exiting process');
+        process.exit(0);
+      }, 1000);
     };
     
-    // Listen for termination signals
+    // Handle termination signals
     process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     process.on('SIGINT', () => gracefulShutdown('SIGINT'));
     
-    // Handle unhandled rejections
+    // Handle unhandled promise rejections
     process.on('unhandledRejection', (reason, promise) => {
       logger.error({
         msg: 'Unhandled promise rejection',
-        reason,
-        promise,
+        reason: reason instanceof Error ? reason.message : String(reason),
+        stack: reason instanceof Error ? reason.stack : undefined,
       });
     });
     
@@ -83,18 +72,19 @@ const startServer = async () => {
         error: error.message,
         stack: error.stack,
       });
-      // Continue running instead of exiting
-      // This makes the service more resilient 
+      
+      // Exit with error
+      process.exit(1);
     });
   } catch (error) {
     logger.error({
       msg: 'Failed to start server',
       error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
-    // Exit with error
     process.exit(1);
   }
 };
 
-// Start the server
+// Start server
 startServer();

@@ -1,0 +1,49 @@
+flowchart TD
+    Client(User/Client) --> API(API Layer)
+    API --> HC(Health Check Controller)
+    API --> RC(Result Controller) 
+    API --> NC(Notification Controller)
+    API --> SC(Status Controller)
+    
+    HC --> HCS(Health Check Service)
+    RC --> HCS
+    NC --> NS(Notification Service)
+    SC --> HCS
+    SC --> SCS(Scheduler Service)
+    
+    HCS --> HCR(Health Check Repository)
+    HCS --> NS
+    NS --> NR(Notification Repository)
+    SCS --> HCS
+    
+    HCR --> DB[(MongoDB)]
+    NR --> DB
+    
+    subgraph "API Layer"
+        API
+        HC
+        RC
+        NC
+        SC
+    end
+    
+    subgraph "Service Layer"
+        HCS
+        NS
+        SCS
+    end
+    
+    subgraph "Repository Layer"
+        HCR
+        NR
+    end
+    
+    subgraph "Health Check Modules"
+        API_Check(API Check) --> HCS
+        Process_Check(Process Check) --> HCS
+        Service_Check(Service Check) --> HCS
+        Server_Check(Server Check) --> HCS
+    end
+    
+    NS --> Email(Email Service)
+    Email --> SMTP[SMTP Server]

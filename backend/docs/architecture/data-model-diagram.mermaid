@@ -1,0 +1,65 @@
+erDiagram
+    HealthCheck {
+        string id PK
+        string name
+        string type
+        boolean enabled
+        int checkInterval
+        boolean notifyOnFailure
+        string endpoint
+        int timeout
+        string processKeyword
+        int port
+        string customCommand
+        string expectedOutput
+        string restartCommand
+        date createdAt
+        date updatedAt
+    }
+    
+    Result {
+        string id PK
+        string healthCheckId FK
+        string status
+        string details
+        float memoryUsage
+        float cpuUsage
+        int responseTime
+        date createdAt
+    }
+    
+    Notification {
+        string id PK
+        string type
+        string subject
+        string content
+        string[] recipients
+        string status
+        date createdAt
+    }
+    
+    EmailConfig {
+        string id PK
+        string[] recipients
+        int throttleMinutes
+        boolean enabled
+        date lastSentAt
+        date createdAt
+        date updatedAt
+    }
+    
+    Subscription {
+        string id PK
+        string email
+        string healthCheckId FK
+        boolean active
+        string severity
+        date verifiedAt
+        string verifyToken
+        string unsubscribeToken
+        date createdAt
+        date updatedAt
+    }
+    
+    HealthCheck ||--o{ Result : "has many"
+    HealthCheck ||--o{ Subscription : "has many"

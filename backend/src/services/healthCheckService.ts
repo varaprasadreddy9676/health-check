@@ -1,375 +1,457 @@
-import logger from '../utils/logger';
-import { HealthCheck } from '../models/HealthCheck';
-import { HealthCheckResult } from '../models/HealthCheckResult';
-import { checkApiHealth } from '../modules/healthChecks/apiCheck';
-import { checkProcessHealth, executeCustomCommand, restartProcess } from '../modules/healthChecks/processCheck';
-import { checkSystemHealth } from '../modules/healthChecks/systemCheck';
+import axios from 'axios';
+import { exec } from 'child_process';
+import os from 'os';
+import util from 'util';
+import { IHealthCheck } from '../models/HealthCheck';
+import { ResultStatus } from '../models/Result';
+import { healthCheckRepository } from '../repositories/healthCheckRepository';
 import { notificationService } from './notificationService';
-import { getHealthCheckRepository } from '../repositories/factory';
-import { getIncidentRepository } from '../repositories/factory';
-import { getNotificationRepository } from '../repositories/factory';
+import logger from '../utils/logger';
 
-interface HealthCheckExecutionResult {
+// Convert exec to Promise
+const execPromise = util.promisify(exec);
+
+// Health check result interface
+export interface HealthCheckResult {
   isHealthy: boolean;
+  status: ResultStatus;
   details: string;
-  cpuUsage?: number;
   memoryUsage?: number;
+  cpuUsage?: number;
   responseTime?: number;
 }
 
-class HealthCheckService {
-  // Execute a single health check
-  async executeHealthCheck(healthCheck: HealthCheck): Promise<HealthCheckExecutionResult> {
+// Health check service
+export class HealthCheckService {
+  /**
+   * Execute a health check based on its type
+   */
+  async executeHealthCheck(healthCheck: IHealthCheck): Promise<HealthCheckResult> {
     try {
-      logger.info({ 
-        msg: `Executing health check: ${healthCheck.name}`, 
-        type: healthCheck.type,
-        healthCheckId: healthCheck.id
+      logger.info({
+        msg: `Executing health check`,
+        id: healthCheck.id,
+        name: healthCheck.name,
+        type: healthCheck.type
       });
       
-      let result: HealthCheckExecutionResult;
+      let result: HealthCheckResult;
       
       switch (healthCheck.type) {
         case 'API':
-          result = await checkApiHealth(healthCheck);
+          result = await this.executeApiHealthCheck(healthCheck);
           break;
         case 'PROCESS':
-          result = await checkProcessHealth(healthCheck);
+          result = await this.executeProcessHealthCheck(healthCheck);
           break;
         case 'SERVICE':
-          result = await executeCustomCommand(healthCheck);
+          result = await this.executeServiceHealthCheck(healthCheck);
           break;
         case 'SERVER':
-          result = await checkSystemHealth();
+          result = await this.executeServerHealthCheck();
           break;
         default:
-          return {
+          result = {
             isHealthy: false,
-            details: `Unknown health check type: ${healthCheck.type}`,
+            status: 'Unhealthy',
+            details: `Unknown health check type: ${healthCheck.type}`
           };
       }
       
-      // Log the result
-      logger.info({
-        msg: `Health check result`,
+      // Save result to database
+      await healthCheckRepository.saveResult({
         healthCheckId: healthCheck.id,
-        name: healthCheck.name,
-        isHealthy: result.isHealthy,
-        details: result.details
+        status: result.status,
+        details: result.details,
+        memoryUsage: result.memoryUsage,
+        cpuUsage: result.cpuUsage,
+        responseTime: result.responseTime
       });
       
-      // Save the result to the database
-      const savedResult = await this.saveHealthCheckResult(healthCheck.id, result);
+      // Handle unhealthy result
+      if (!result.isHealthy && healthCheck.notifyOnFailure) {
+        await this.handleUnhealthyResult(healthCheck, result);
+      }
       
       logger.info({
-        msg: "Health check result saved",
-        resultId: savedResult.id,
-        healthCheckId: healthCheck.id
+        msg: `Health check completed`,
+        id: healthCheck.id,
+        name: healthCheck.name,
+        status: result.status,
+        isHealthy: result.isHealthy
       });
       
       return result;
     } catch (error) {
-      logger.error({
-        msg: `Error executing health check: ${healthCheck.name}`,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorResult: HealthCheckResult = {
         isHealthy: false,
-        details: `Error executing health check: ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
-  }
-
-  // Save health check result
-  private async saveHealthCheckResult(healthCheckId: string, result: HealthCheckExecutionResult): Promise<HealthCheckResult> {
-    try {
-      const healthCheckRepository = getHealthCheckRepository();
-      return healthCheckRepository.saveResult({
-        healthCheckId,
-        status: result.isHealthy ? 'Healthy' : 'Unhealthy',
-        details: result.details,
-        cpuUsage: result.cpuUsage,
-        memoryUsage: result.memoryUsage,
-        responseTime: result.responseTime,
-        createdAt: new Date()
-      });
-    } catch (error) {
-      logger.error({
-        msg: 'Error saving health check result',
-        error: error instanceof Error ? error.message : String(error),
-        healthCheckId
-      });
-      throw error;
-    }
-  }
-
-  // Handle a failed health check
-  private async handleFailedHealthCheck(healthCheck: HealthCheck, details: string): Promise<void> {
-    try {
-      // 1. Create or update incident
-      await this.createIncident(healthCheck, details);
-      
-      // 2. Send notification if needed
-      const shouldNotify = await this.shouldSendNotification();
-      if (shouldNotify) {
-        const result = { 
-          isHealthy: false, 
-          details: details 
-        };
-        await this.sendNotification(healthCheck, result);
-      }
-    } catch (error) {
-      logger.error({
-        msg: 'Error handling failed health check',
-        error: error instanceof Error ? error.message : String(error),
-        healthCheckId: healthCheck.id,
-        healthCheckName: healthCheck.name
-      });
-    }
-  }
-
-  // Create or update an incident
-  private async createIncident(healthCheck: HealthCheck, details: string): Promise<void> {
-    try {
-      logger.info({
-        msg: 'Creating/updating incident',
-        healthCheckId: healthCheck.id,
-        healthCheckName: healthCheck.name
-      });
-      
-      const incidentRepository = getIncidentRepository();
-      
-      // Check for existing incident
-      const activeIncidents = await incidentRepository.findAll(1, 10, 'investigating');
-      const existingIncident = activeIncidents.incidents.find(inc => inc.healthCheckId === healthCheck.id);
-      
-      if (existingIncident) {
-        // Update existing incident
-        await incidentRepository.addEvent({
-          incidentId: existingIncident.id,
-          message: `Still unhealthy: ${details}`,
-          createdAt: new Date(),
-        });
-        
-        logger.info({
-          msg: 'Updated existing incident',
-          incidentId: existingIncident.id,
-          healthCheckId: healthCheck.id
-        });
-      } else {
-        // Create new incident
-        const incident = await incidentRepository.create({
-          healthCheckId: healthCheck.id,
-          title: `${healthCheck.name} is unhealthy`,
-          status: 'investigating',
-          severity: 'high',
-          details,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-        
-        // Add first event
-        await incidentRepository.addEvent({
-          incidentId: incident.id,
-          message: `Incident created: ${details}`,
-          createdAt: new Date(),
-        });
-        
-        logger.info({
-          msg: 'Created new incident',
-          incidentId: incident.id,
-          healthCheckId: healthCheck.id
-        });
-      }
-    } catch (error) {
-      logger.error({
-        msg: 'Error creating/updating incident',
-        error: error instanceof Error ? error.message : String(error),
-        healthCheckId: healthCheck.id,
-        healthCheckName: healthCheck.name
-      });
-    }
-  }
-
-  // Send notification for an unhealthy check
-  private async sendNotification(healthCheck: HealthCheck, result: HealthCheckExecutionResult): Promise<void> {
-    try {
-      logger.info({
-        msg: 'Sending notification',
-        healthCheckId: healthCheck.id,
-        healthCheckName: healthCheck.name
-      });
-      
-      const notificationData = {
-        subject: `Health Check Alert - ${healthCheck.name} is unhealthy`,
-        results: [{
-          name: healthCheck.name,
-          type: healthCheck.type,
-          status: 'Unhealthy',
-          details: result.details,
-          lastChecked: new Date().toISOString(),
-          healthCheckId: healthCheck.id,
-          severity: 'high'
-        }],
-        hasFailures: true,
+        status: 'Unhealthy',
+        details: `Error executing health check: ${errorMessage}`
       };
       
-      await notificationService.sendHealthCheckNotification(notificationData);
-      
-      logger.info({
-        msg: 'Notification sent successfully',
-        healthCheckId: healthCheck.id
+      // Save error result
+      await healthCheckRepository.saveResult({
+        healthCheckId: healthCheck.id,
+        status: errorResult.status,
+        details: errorResult.details
       });
-    } catch (error) {
+      
       logger.error({
-        msg: 'Error sending notification',
-        error: error instanceof Error ? error.message : String(error),
-        healthCheckId: healthCheck.id
+        msg: `Health check error`,
+        id: healthCheck.id,
+        name: healthCheck.name,
+        error: errorMessage,
+        stack: error instanceof Error ? error.stack : undefined
       });
-    }
-  }
-
-  // Check if we should send a notification (simple throttling)
-  private async shouldSendNotification(): Promise<boolean> {
-    try {
-      const notificationRepository = getNotificationRepository();
-      const lastNotificationTime = await notificationRepository.getLastNotificationTime('email');
       
-      if (!lastNotificationTime) {
-        logger.info('No previous notification found, sending notification');
-        return true;
+      // Handle unhealthy result
+      if (healthCheck.notifyOnFailure) {
+        await this.handleUnhealthyResult(healthCheck, errorResult);
       }
       
-      const throttleMinutes = 60; // 1 hour
-      const throttleMs = throttleMinutes * 60 * 1000;
-      const elapsedMs = Date.now() - lastNotificationTime.getTime();
-      
-      const shouldSend = elapsedMs > throttleMs;
-      
-      logger.info({
-        msg: 'Notification throttle check',
-        lastNotificationTime: lastNotificationTime.toISOString(),
-        elapsedMinutes: Math.floor(elapsedMs / 60000),
-        throttleMinutes: throttleMinutes,
-        shouldSend: shouldSend
-      });
-      
-      return shouldSend;
-    } catch (error) {
-      logger.error({
-        msg: 'Error checking notification throttling',
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return true; // If we can't check, default to sending
+      return errorResult;
     }
   }
-
-  // Method called by scheduler to execute a health check
-  async forceHealthCheck(healthCheckId: string): Promise<HealthCheckExecutionResult> {
+  
+  /**
+   * Execute API health check
+   */
+  private async executeApiHealthCheck(healthCheck: IHealthCheck): Promise<HealthCheckResult> {
     try {
-      const healthCheckRepository = getHealthCheckRepository();
-      const healthCheck = await healthCheckRepository.findById(healthCheckId);
-      
-      if (!healthCheck) {
-        logger.error({
-          msg: 'Health check not found',
-          healthCheckId
-        });
+      if (!healthCheck.endpoint) {
         return {
           isHealthy: false,
-          details: 'Health check not found',
+          status: 'Unhealthy',
+          details: 'No endpoint URL provided'
         };
       }
       
-      const result = await this.executeHealthCheck(healthCheck);
+      const startTime = Date.now();
+      const timeout = healthCheck.timeout || 5000;
       
-      // If unhealthy, handle it
-      if (!result.isHealthy) {
-        await this.handleFailedHealthCheck(healthCheck, result.details);
+      const response = await axios.get(healthCheck.endpoint, {
+        timeout,
+        validateStatus: function (status) {
+          return status >= 200 && status < 300;
+        }
+      });
+      
+      const responseTime = Date.now() - startTime;
+      
+      return {
+        isHealthy: true,
+        status: 'Healthy',
+        details: `API check passed. Status: ${response.status}`,
+        responseTime
+      };
+    } catch (error: any) { // Using any for specific axios error handling
+      let details = 'API check failed';
+      
+      if (error.code === 'ECONNABORTED') {
+        details = `API check timed out after ${healthCheck.timeout}ms`;
+      } else if (error.response) {
+        details = `API check failed with status ${error.response.status}`;
+      } else if (error.request) {
+        details = `API check failed. No response received: ${error.message}`;
+      } else {
+        details = `API check failed: ${error.message}`;
       }
       
-      return result;
-    } catch (error) {
-      logger.error({
-        msg: 'Error in forceHealthCheck',
-        error: error instanceof Error ? error.message : String(error),
-        healthCheckId,
-      });
       return {
         isHealthy: false,
-        details: `Error forcing health check: ${error instanceof Error ? error.message : String(error)}`,
+        status: 'Unhealthy',
+        details,
+        responseTime: error.responseTime
       };
     }
   }
-
-  // Execute all health checks (for manual runs or testing)
-  async runAllHealthChecks(): Promise<void> {
+  
+  /**
+   * Execute process health check
+   */
+  private async executeProcessHealthCheck(healthCheck: IHealthCheck): Promise<HealthCheckResult> {
     try {
-      const healthCheckRepository = getHealthCheckRepository();
-      const healthChecks = await healthCheckRepository.findAll({ enabled: true });
-      
-      logger.info({ msg: `Running ${healthChecks.length} health checks` });
-      
-      for (const healthCheck of healthChecks) {
+      if (healthCheck.port) {
         try {
-          const result = await this.executeHealthCheck(healthCheck);
-          
-          if (!result.isHealthy) {
-            await this.handleFailedHealthCheck(healthCheck, result.details);
-          }
+          await execPromise(`nc -z localhost ${healthCheck.port}`);
+          return {
+            isHealthy: true,
+            status: 'Healthy',
+            details: `Port ${healthCheck.port} is open`
+          };
         } catch (error) {
-          logger.error({
-            msg: 'Error processing health check in runAllHealthChecks',
-            error: error instanceof Error ? error.message : String(error),
-            healthCheckId: healthCheck.id,
-            healthCheckName: healthCheck.name
-          });
+          return {
+            isHealthy: false,
+            status: 'Unhealthy',
+            details: `Port ${healthCheck.port} is not open`
+          };
         }
       }
       
-      logger.info({ msg: 'All health checks completed' });
+      if (!healthCheck.processKeyword) {
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: 'No process keyword provided'
+        };
+      }
+      
+      const commandToExecute = `ps -eo pid,%cpu,%mem,command | grep -E "${healthCheck.processKeyword}" | grep -v grep`;
+      const { stdout } = await execPromise(commandToExecute);
+      const lines = stdout.trim().split('\n');
+      
+      if (lines.length === 0 || lines[0] === '') {
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: `Process with keyword "${healthCheck.processKeyword}" not found`
+        };
+      }
+      
+      // Extract process info from the first matching line
+      const [pid, cpu, memory, ...commandArray] = lines[0].split(/\s+/);
+      const command = commandArray.join(' ');
+      
+      return {
+        isHealthy: true,
+        status: 'Healthy',
+        details: `PID: ${pid}, Command: ${command}`,
+        cpuUsage: parseFloat(cpu),
+        memoryUsage: parseFloat(memory)
+      };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        isHealthy: false,
+        status: 'Unhealthy',
+        details: `Error checking process: ${errorMessage}`
+      };
+    }
+  }
+  
+  /**
+   * Execute service health check
+   */
+  private async executeServiceHealthCheck(healthCheck: IHealthCheck): Promise<HealthCheckResult> {
+    try {
+      if (!healthCheck.customCommand) {
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: 'No custom command provided'
+        };
+      }
+      
+      const { stdout } = await execPromise(healthCheck.customCommand);
+      const response = stdout.trim();
+      
+      if (healthCheck.expectedOutput && response.includes(healthCheck.expectedOutput)) {
+        return {
+          isHealthy: true,
+          status: 'Healthy',
+          details: `Command executed successfully. Response matches expected output.`
+        };
+      } else if (!healthCheck.expectedOutput) {
+        // If no expected output is provided, just check if command executes without error
+        return {
+          isHealthy: true,
+          status: 'Healthy',
+          details: `Command executed successfully. Response: ${response}`
+        };
+      } else {
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: `Expected output not found. Response: ${response}`
+        };
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        isHealthy: false,
+        status: 'Unhealthy',
+        details: `Error executing command: ${errorMessage}`
+      };
+    }
+  }
+  
+  /**
+   * Execute server health check
+   */
+  private async executeServerHealthCheck(): Promise<HealthCheckResult> {
+    try {
+      const cpuUsage = os.loadavg()[0];
+      const totalMemory = os.totalmem();
+      const freeMemory = os.freemem();
+      const freeMemoryPercentage = (freeMemory / totalMemory) * 100;
+      
+      const cpuThreshold = 0.8;
+      const memoryThreshold = 20;
+      
+      const isHighCpu = cpuUsage > cpuThreshold;
+      const isLowMemory = freeMemoryPercentage < memoryThreshold;
+      const isHealthy = !isHighCpu && !isLowMemory;
+      
+      let details = `CPU load: ${cpuUsage.toFixed(2)}, Free memory: ${freeMemoryPercentage.toFixed(2)}%`;
+      
+      if (isHighCpu) {
+        details += ', High CPU usage detected';
+      }
+      
+      if (isLowMemory) {
+        details += ', Low memory detected';
+      }
+      
+      return {
+        isHealthy,
+        status: isHealthy ? 'Healthy' : 'Unhealthy',
+        details,
+        cpuUsage,
+        memoryUsage: 100 - freeMemoryPercentage
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        isHealthy: false,
+        status: 'Unhealthy',
+        details: `Error checking system health: ${errorMessage}`
+      };
+    }
+  }
+  
+  /**
+   * Handle unhealthy result
+   */
+  private async handleUnhealthyResult(healthCheck: IHealthCheck, result: HealthCheckResult): Promise<void> {
+    try {
+      // Notify about the issue
+      await notificationService.sendHealthCheckAlert({
+        healthCheckId: healthCheck.id,
+        name: healthCheck.name,
+        type: healthCheck.type,
+        status: result.status,
+        details: result.details,
+        cpuUsage: result.cpuUsage,
+        memoryUsage: result.memoryUsage,
+        responseTime: result.responseTime
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
-        msg: 'Error running all health checks',
-        error: error instanceof Error ? error.message : String(error),
+        msg: 'Error handling unhealthy result',
+        error: errorMessage,
+        healthCheckId: healthCheck.id
       });
     }
   }
-
-  // Restart a service (used by the API)
-  async restartService(healthCheckId: string): Promise<{ success: boolean; details: string }> {
+  
+  /**
+   * Force a health check to run immediately
+   */
+  async forceHealthCheck(id: string): Promise<HealthCheckResult> {
+    const healthCheck = await healthCheckRepository.findById(id);
+    
+    if (!healthCheck) {
+      return {
+        isHealthy: false,
+        status: 'Unhealthy',
+        details: `Health check with ID ${id} not found`
+      };
+    }
+    
+    return await this.executeHealthCheck(healthCheck);
+  }
+  
+  /**
+   * Restart a service
+   */
+  async restartService(id: string): Promise<{ success: boolean, details: string }> {
     try {
-      const healthCheckRepository = getHealthCheckRepository();
-      const healthCheck = await healthCheckRepository.findById(healthCheckId);
+      const healthCheck = await healthCheckRepository.findById(id);
       
       if (!healthCheck) {
         return {
           success: false,
-          details: 'Health check not found',
+          details: `Health check with ID ${id} not found`
         };
       }
       
       if (!healthCheck.restartCommand) {
         return {
           success: false,
-          details: 'No restart command configured for this health check',
+          details: 'No restart command configured for this health check'
         };
       }
       
-      const result = await restartProcess(healthCheck);
-      return result;
+      // Execute restart command
+      const { stdout, stderr } = await execPromise(healthCheck.restartCommand);
+      
+      logger.info({
+        msg: `Service restart executed`,
+        id: healthCheck.id,
+        name: healthCheck.name,
+        stdout: stdout.trim(),
+        stderr: stderr.trim()
+      });
+      
+      // Re-run health check after restart
+      setTimeout(async () => {
+        await this.executeHealthCheck(healthCheck);
+      }, 5000);
+      
+      return {
+        success: true,
+        details: `Restart command executed. Output: ${stdout.trim()}`
+      };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
         msg: 'Error restarting service',
-        error: error instanceof Error ? error.message : String(error),
-        healthCheckId,
+        error: errorMessage,
+        id
       });
+      
       return {
         success: false,
-        details: `Error restarting service: ${error instanceof Error ? error.message : String(error)}`,
+        details: `Error restarting service: ${errorMessage}`
       };
+    }
+  }
+  
+  /**
+   * Run all enabled health checks
+   */
+  async runAllHealthChecks(): Promise<void> {
+    try {
+      const healthChecks = await healthCheckRepository.findAll({ enabled: true });
+      
+      logger.info({ msg: `Running ${healthChecks.length} health checks` });
+      
+      // Run health checks in parallel with a concurrency limit
+      const concurrencyLimit = 5;
+      const chunks = [];
+      
+      for (let i = 0; i < healthChecks.length; i += concurrencyLimit) {
+        chunks.push(healthChecks.slice(i, i + concurrencyLimit));
+      }
+      
+      for (const chunk of chunks) {
+        await Promise.all(
+          chunk.map(healthCheck => this.executeHealthCheck(healthCheck))
+        );
+      }
+      
+      logger.info({ msg: 'All health checks completed' });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error({
+        msg: 'Error running all health checks',
+        error: errorMessage
+      });
     }
   }
 }
 
+// Export singleton instance
 export const healthCheckService = new HealthCheckService();
