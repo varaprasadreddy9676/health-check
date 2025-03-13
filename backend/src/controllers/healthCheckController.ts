@@ -30,6 +30,77 @@ export class HealthCheckController {
     
     body('restartCommand').optional()
   ];
+
+  async reportRecovery(req: Request, res: Response): Promise<Response> {
+    try {
+      const { id } = req.params;
+      const { comments } = req.body;
+      
+      const healthCheck = await healthCheckRepository.findById(id);
+      if (!healthCheck) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            message: `Health check with ID ${id} not found`
+          }
+        });
+      }
+      
+      // Force a check to verify the service is healthy
+      const result = await healthCheckService.executeHealthCheckWithoutNotification(healthCheck);
+      
+      if (!result.isHealthy) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            message: "Cannot report recovery: service is still unhealthy"
+          }
+        });
+      }
+      
+      // Save the result with the recovery comments
+      const updatedResult = await healthCheckRepository.saveResult({
+        healthCheckId: id,
+        status: result.status,
+        details: comments ? `${result.details} (Recovery note: ${comments})` : result.details,
+        memoryUsage: result.memoryUsage,
+        cpuUsage: result.cpuUsage,
+        responseTime: result.responseTime
+      });
+      
+      // Send recovery notification
+      await healthCheckService.sendRecoveryNotifications([{
+        healthCheck,
+        result: {
+          ...result,
+          details: comments ? `${result.details} (Recovery note: ${comments})` : result.details
+        }
+      }]);
+      
+      return res.status(200).json({
+        success: true,
+        data: {
+          message: "Recovery reported and notification sent",
+          healthCheck: healthCheck.name,
+          status: result.status,
+          timestamp: new Date().toISOString()
+        }
+      });
+    } catch (error) {
+      logger.error({
+        msg: 'Error reporting recovery',
+        error: error instanceof Error ? error.message : String(error),
+        id: req.params.id
+      });
+      
+      return res.status(500).json({
+        success: false,
+        error: {
+          message: "Failed to report recovery"
+        }
+      });
+    }
+  }
   
   /**
    * Get all health checks
@@ -363,6 +434,131 @@ export class HealthCheckController {
       });
     }
   }
+  // Add to controllers/healthCheckController.ts
+async runAllChecks(req: Request, res: Response): Promise<Response> {
+  try {
+    // Start the health check process asynchronously
+    // This allows us to return a response immediately while checks run in background
+    healthCheckService.runAllHealthChecks().catch(error => {
+      logger.error({
+        msg: 'Error in background health check execution',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+    
+    return res.status(200).json({
+      success: true,
+      data: {
+        message: 'Health check execution started',
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    logger.error({
+      msg: 'Error triggering health checks',
+      error: error instanceof Error ? error.message : String(error)
+    });
+    
+    return res.status(500).json({
+      success: false,
+      error: {
+        message: 'Failed to trigger health checks'
+      }
+    });
+  }
+}
+// Add to controllers/healthCheckController.ts
+async validateHealthCheckConfig(req: Request, res: Response): Promise<Response> {
+  try {
+    // Use the existing validation middleware
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Validation failed',
+          details: errors.array()
+        }
+      });
+    }
+    
+    const config = req.body;
+    
+    // Perform type-specific validation
+    let extraValidation: { valid: boolean; message?: string } = { valid: true };
+    
+    switch (config.type) {
+      case 'API':
+        if (!config.endpoint) {
+          extraValidation = { valid: false, message: 'Endpoint is required for API type health checks' };
+        } else {
+          // Try to validate the URL
+          try {
+            new URL(config.endpoint);
+          } catch (e) {
+            extraValidation = { valid: false, message: 'Endpoint is not a valid URL' };
+          }
+        }
+        break;
+        
+      case 'PROCESS':
+        if (!config.processKeyword && !config.port) {
+          extraValidation = { valid: false, message: 'Process keyword or port is required for PROCESS type health checks' };
+        }
+        break;
+        
+      case 'SERVICE':
+        if (!config.customCommand) {
+          extraValidation = { valid: false, message: 'Custom command is required for SERVICE type health checks' };
+        }
+        break;
+        
+      case 'SERVER':
+        // No extra validation needed
+        break;
+        
+      default:
+        extraValidation = { valid: false, message: `Invalid health check type: ${config.type}` };
+    }
+    
+    // If restart command is provided, check that it's not empty
+    if (config.restartCommand !== undefined && config.restartCommand.trim() === '') {
+      extraValidation = { valid: false, message: 'Restart command cannot be empty if provided' };
+    }
+    
+    if (!extraValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Validation failed',
+          details: [{ msg: extraValidation.message, param: 'type-specific' }]
+        }
+      });
+    }
+    
+    // If we get here, validation passed
+    return res.status(200).json({
+      success: true,
+      data: {
+        message: 'Configuration is valid',
+        config
+      }
+    });
+  } catch (error) {
+    logger.error({
+      msg: 'Error validating health check configuration',
+      error: error instanceof Error ? error.message : String(error),
+      data: req.body
+    });
+    
+    return res.status(500).json({
+      success: false,
+      error: {
+        message: 'Failed to validate configuration'
+      }
+    });
+  }
+}
 }
 
 // Export controller instance

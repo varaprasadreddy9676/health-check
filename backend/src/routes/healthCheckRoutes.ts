@@ -17,5 +17,11 @@ router.delete('/:id', healthCheckController.delete);
 router.patch('/:id/toggle', healthCheckController.toggle);
 router.post('/:id/force-check', healthCheckController.forceCheck);
 router.post('/:id/restart', healthCheckController.restartService);
+router.post('/:id/report-recovery', healthCheckController.reportRecovery);
+// Add to routes/healthCheckRoutes.ts
+router.post('/run-all', healthCheckController.runAllChecks);
+
+// Add to routes/healthCheckRoutes.ts
+router.post('/validate', healthCheckController.validateHealthCheckConfig);
 
 export default router;

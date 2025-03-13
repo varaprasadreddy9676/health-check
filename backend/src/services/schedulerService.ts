@@ -3,14 +3,11 @@ import { healthCheckService } from './healthCheckService';
 import { IHealthCheck } from '../models/HealthCheck';
 import logger from '../utils/logger';
 
-// Scheduler service to run health checks at the configured intervals
 export class SchedulerService {
   private scheduledTasks: Map<string, NodeJS.Timeout> = new Map();
   private isRunning: boolean = false;
-  
-  /**
-   * Start the scheduler
-   */
+  private batchModeEnabled: boolean = true;
+
   async start(): Promise<void> {
     try {
       if (this.isRunning) {
@@ -20,16 +17,30 @@ export class SchedulerService {
       
       logger.info('Starting health check scheduler');
       
-      // Schedule all enabled health checks
-      await this.scheduleAllHealthChecks();
+      // Run all health checks in batch mode immediately at startup
+      if (this.batchModeEnabled) {
+        await healthCheckService.runAllHealthChecks();
+      } else {
+        await this.scheduleAllHealthChecks();
+      }
       
-      // Set up periodic refresh to detect configuration changes
-      setInterval(async () => {
-        await this.refreshScheduledTasks();
-      }, 5 * 60 * 1000); // Refresh every 5 minutes
+      // Set up periodic batch check every 5 minutes 
+      // (adjust this interval based on your requirements)
+      const batchCheckInterval = 5 * 60 * 1000; // 5 minutes
+      
+      if (this.batchModeEnabled) {
+        setInterval(async () => {
+          await healthCheckService.runAllHealthChecks();
+        }, batchCheckInterval);
+      } else {
+        // If not using batch mode, refresh scheduled tasks every 5 minutes
+        setInterval(async () => {
+          await this.refreshScheduledTasks();
+        }, batchCheckInterval);
+      }
       
       this.isRunning = true;
-      logger.info('--------Health check scheduler started----------');
+      logger.info(`Health check scheduler started in ${this.batchModeEnabled ? 'batch' : 'individual'} mode`);
     } catch (error) {
       logger.error({
         msg: 'Failed to start health check scheduler',
@@ -38,10 +49,7 @@ export class SchedulerService {
       throw error;
     }
   }
-  
-  /**
-   * Stop the scheduler
-   */
+
   stop(): void {
     if (!this.isRunning) {
       return;
@@ -49,7 +57,6 @@ export class SchedulerService {
     
     logger.info('Stopping health check scheduler');
     
-    // Cancel all scheduled tasks
     for (const [id, task] of this.scheduledTasks.entries()) {
       clearInterval(task);
       this.scheduledTasks.delete(id);
@@ -58,14 +65,11 @@ export class SchedulerService {
     this.isRunning = false;
     logger.info('Health check scheduler stopped');
   }
-  
-  /**
-   * Schedule all enabled health checks
-   */
+
+  // This method schedules individual health checks (used in non-batch mode)
   private async scheduleAllHealthChecks(): Promise<void> {
     try {
       const healthChecks = await healthCheckRepository.findAll({ enabled: true });
-      
       logger.info(`Scheduling ${healthChecks.length} health checks`);
       
       for (const healthCheck of healthChecks) {
@@ -78,28 +82,21 @@ export class SchedulerService {
       });
     }
   }
-  
-  /**
-   * Schedule a single health check
-   */
+
   private scheduleHealthCheck(healthCheck: IHealthCheck): void {
     try {
-      // Clear existing task if it exists
       if (this.scheduledTasks.has(healthCheck.id)) {
         clearInterval(this.scheduledTasks.get(healthCheck.id)!);
         this.scheduledTasks.delete(healthCheck.id);
       }
       
-      // Skip if check is disabled
       if (!healthCheck.enabled) {
         return;
       }
       
-      // Get check interval (minimum 10 seconds)
       const intervalSeconds = Math.max(healthCheck.checkInterval || 300, 10);
       const intervalMs = intervalSeconds * 1000;
       
-      // Schedule periodic health check
       const task = setInterval(async () => {
         try {
           await healthCheckService.executeHealthCheck(healthCheck);
@@ -122,7 +119,7 @@ export class SchedulerService {
         intervalSeconds
       });
       
-      // Run the check immediately
+      // Execute the check immediately after scheduling
       setTimeout(async () => {
         try {
           await healthCheckService.executeHealthCheck(healthCheck);
@@ -144,19 +141,15 @@ export class SchedulerService {
       });
     }
   }
-  
-  /**
-   * Refresh scheduled tasks based on current configuration
-   */
+
   private async refreshScheduledTasks(): Promise<void> {
     try {
       logger.info('Refreshing scheduled health checks');
       
-      // Get all health checks
       const healthChecks = await healthCheckRepository.findAll();
-      
-      // Remove tasks for deleted health checks
       const currentIds = new Set(healthChecks.map(check => check.id));
+      
+      // Remove tasks for health checks that no longer exist
       for (const [id, task] of this.scheduledTasks.entries()) {
         if (!currentIds.has(id)) {
           clearInterval(task);
@@ -168,7 +161,7 @@ export class SchedulerService {
         }
       }
       
-      // Update tasks based on enabled status
+      // Add or update tasks for current health checks
       for (const healthCheck of healthChecks) {
         if (healthCheck.enabled) {
           this.scheduleHealthCheck(healthCheck);
@@ -191,21 +184,23 @@ export class SchedulerService {
       });
     }
   }
-  
-  /**
-   * Get the number of active scheduled tasks
-   */
+
+  enableBatchMode(enabled: boolean = true): void {
+    this.batchModeEnabled = enabled;
+    logger.info(`Batch mode ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
   getActiveTaskCount(): number {
     return this.scheduledTasks.size;
   }
-  
-  /**
-   * Check if the scheduler is running
-   */
+
   isSchedulerRunning(): boolean {
     return this.isRunning;
   }
+
+  isBatchModeEnabled(): boolean {
+    return this.batchModeEnabled;
+  }
 }
 
-// Export singleton instance
 export const schedulerService = new SchedulerService();

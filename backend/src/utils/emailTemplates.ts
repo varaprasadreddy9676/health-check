@@ -30,16 +30,18 @@ function ensureDirectoriesExist(): void {
 export function renderHealthCheckAlertEmail(data: {
     subject: string;
     results: Array<{
-        name: string;
-        type: string | ServiceType;
-        status: string | HealthStatus;
-        details: string;
-        cpuUsage?: number;
-        memoryUsage?: number;
-        responseTime?: number;
+      name: string;
+      type: string | ServiceType;
+      status: string | HealthStatus;
+      details: string;
+      cpuUsage?: number;
+      memoryUsage?: number;
+      responseTime?: number;
     }>;
     timestamp: Date;
     currentYear: number;
+    serviceName?: string;        // Add this
+    hasSuccessfulRecovery?: boolean;  // Add this
     unsubscribeUrl?: string;
     dashboardUrl?: string;
 }): string {

@@ -5,6 +5,7 @@ import { verifyEmailConfig } from './config/email';
 import { createTemplateFiles } from './utils/emailTemplates';
 import { schedulerService } from './services/schedulerService';
 import logger from './utils/logger';
+import { settingRepository } from './repositories/settingRepository';
 
 // Validate environment variables
 validateEnv();
@@ -18,7 +19,8 @@ const startServer = async () => {
     // Connect to database
     await connectDB();
     logger.info('Connected to MongoDB');
-    
+    await settingRepository.initializeSettings();
+   logger.info('Settings initialized');
     // Verify email configuration
     const emailConfigured = await verifyEmailConfig();
     logger.info(`Email service ${emailConfigured ? 'configured' : 'not configured properly'}`);
