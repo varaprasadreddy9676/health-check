@@ -1,9 +1,8 @@
 import mongoose, { Document, Schema } from 'mongoose';
+import { env } from '../config/env';
 
-// Health Check Types
-export type HealthCheckType = 'API' | 'PROCESS' | 'SERVICE' | 'SERVER';
+export type HealthCheckType = 'API' | 'PROCESS' | 'SERVICE' | 'SERVER' | 'LOG';
 
-// Health Check interface
 export interface IHealthCheck extends Document {
   name: string;
   type: HealthCheckType;
@@ -16,6 +15,8 @@ export interface IHealthCheck extends Document {
   // API specific fields
   endpoint?: string;
   timeout?: number;
+  expectedStatusCode?: number;
+  expectedResponseContent?: string;
   
   // Process specific fields
   processKeyword?: string;
@@ -25,11 +26,21 @@ export interface IHealthCheck extends Document {
   customCommand?: string;
   expectedOutput?: string;
   
+  // Log monitoring fields
+  logFilePath?: string;
+  logFreshnessPeriod?: number; // minutes
+  logErrorPatterns?: string[];
+  logMaxSizeMB?: number;
+  
   // Restart capability
   restartCommand?: string;
+  restartThreshold?: number; // number of consecutive failures before restart
+  
+  // Failure tracking
+  consecutiveFailures?: number;
+  lastSuccessTime?: Date;
 }
 
-// Health Check schema
 const healthCheckSchema = new Schema<IHealthCheck>({
   name: {
     type: String,
@@ -38,7 +49,7 @@ const healthCheckSchema = new Schema<IHealthCheck>({
   },
   type: {
     type: String,
-    enum: ['API', 'PROCESS', 'SERVICE', 'SERVER'],
+    enum: ['API', 'PROCESS', 'SERVICE', 'SERVER', 'LOG'],
     required: true
   },
   enabled: {
@@ -47,14 +58,13 @@ const healthCheckSchema = new Schema<IHealthCheck>({
   },
   checkInterval: {
     type: Number,
-    default: 300, // Default: 5 minutes (in seconds)
-    min: 10       // Minimum: 10 seconds
+    default: env.DEFAULT_CHECK_INTERVAL,
+    min: 10
   },
   notifyOnFailure: {
     type: Boolean,
     default: true
   },
-  
   // API specific fields
   endpoint: {
     type: String,
@@ -62,9 +72,14 @@ const healthCheckSchema = new Schema<IHealthCheck>({
   },
   timeout: {
     type: Number,
-    default: 5000 // Default: 5 seconds (in milliseconds)
+    default: 5000
   },
-  
+  expectedStatusCode: {
+    type: Number
+  },
+  expectedResponseContent: {
+    type: String
+  },
   // Process specific fields
   processKeyword: {
     type: String,
@@ -75,7 +90,6 @@ const healthCheckSchema = new Schema<IHealthCheck>({
     min: 1,
     max: 65535
   },
-  
   // Service specific fields
   customCommand: {
     type: String,
@@ -85,22 +99,48 @@ const healthCheckSchema = new Schema<IHealthCheck>({
     type: String,
     trim: true
   },
-  
+  // Log monitoring fields
+  logFilePath: {
+    type: String,
+    trim: true
+  },
+  logFreshnessPeriod: {
+    type: Number,
+    min: 1
+  },
+  logErrorPatterns: {
+    type: [String]
+  },
+  logMaxSizeMB: {
+    type: Number,
+    min: 1
+  },
   // Restart capability
   restartCommand: {
     type: String,
     trim: true
+  },
+  restartThreshold: {
+    type: Number,
+    default: 3,
+    min: 1
+  },
+  // Failure tracking
+  consecutiveFailures: {
+    type: Number,
+    default: 0
+  },
+  lastSuccessTime: {
+    type: Date
   }
 }, {
   timestamps: true
 });
 
-// Indexes
 healthCheckSchema.index({ type: 1 });
 healthCheckSchema.index({ enabled: 1 });
-healthCheckSchema.index({ name: 1, type: 1 }, { unique: true }); // Add unique compound index for name and type
+healthCheckSchema.index({ name: 1, type: 1 }, { unique: true });
 
-// Pre-save validation
 healthCheckSchema.pre('save', function(next) {
   if (this.type === 'API' && !this.endpoint) {
     return next(new Error('Endpoint is required for API type health checks'));
@@ -114,8 +154,11 @@ healthCheckSchema.pre('save', function(next) {
     return next(new Error('Custom command is required for SERVICE type health checks'));
   }
   
+  if (this.type === 'LOG' && !this.logFilePath) {
+    return next(new Error('Log file path is required for LOG type health checks'));
+  }
+  
   next();
 });
 
-// Create model
 export const HealthCheck = mongoose.model<IHealthCheck>('HealthCheck', healthCheckSchema);

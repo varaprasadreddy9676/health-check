@@ -262,53 +262,68 @@ export class HealthCheckRepository {
   /**
    * Get health check metrics
    */
-  async getMetrics(): Promise<{
-    total: number;
-    enabled: number;
-    unhealthy: number;
-    byType: Record<HealthCheckType, number>;
-  }> {
+async getMetrics(): Promise<{
+  total: number;
+  enabled: number;
+  unhealthy: number;
+  byType: Record<HealthCheckType, number>;
+}> {
+  try {
+    const [total, enabled, latestResults] = await Promise.all([
+      HealthCheck.countDocuments(),
+      HealthCheck.countDocuments({ enabled: true }),
+      this.getLatestResults()
+    ]);
+    
+    const unhealthy = latestResults.filter(r => r.status === 'Unhealthy').length;
+    
+    // Update this to include the LOG type
+    const byType: Record<HealthCheckType, number> = {
+      API: 0,
+      PROCESS: 0,
+      SERVICE: 0,
+      SERVER: 0,
+      LOG: 0 // Add this line
+    };
+    
+    const typeCountsArray = await HealthCheck.aggregate([
+      {
+        $group: {
+          _id: "$type",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    typeCountsArray.forEach(item => {
+      if (item._id in byType) {
+        byType[item._id as HealthCheckType] = item.count;
+      }
+    });
+    
+    return {
+      total,
+      enabled,
+      unhealthy,
+      byType
+    };
+  } catch (error) {
+    logger.error({
+      msg: 'Error getting health check metrics',
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
+}
+
+  async findResultById(id: string): Promise<IResult | null> {
     try {
-      const [total, enabled, latestResults] = await Promise.all([
-        HealthCheck.countDocuments(),
-        HealthCheck.countDocuments({ enabled: true }),
-        this.getLatestResults()
-      ]);
-      
-      const unhealthy = latestResults.filter(r => r.status === 'Unhealthy').length;
-      
-      const byType = {
-        API: 0,
-        PROCESS: 0,
-        SERVICE: 0,
-        SERVER: 0
-      };
-      
-      const typeCountsArray = await HealthCheck.aggregate([
-        {
-          $group: {
-            _id: "$type",
-            count: { $sum: 1 }
-          }
-        }
-      ]);
-      
-      typeCountsArray.forEach(item => {
-        if (item._id in byType) {
-          byType[item._id as HealthCheckType] = item.count;
-        }
-      });
-      
-      return {
-        total,
-        enabled,
-        unhealthy,
-        byType
-      };
+      return await Result.findById(id);
     } catch (error) {
       logger.error({
-        msg: 'Error getting health check metrics',
-        error: error instanceof Error ? error.message : String(error)
+        msg: 'Error finding result by ID',
+        error: error instanceof Error ? error.message : String(error),
+        id
       });
       throw error;
     }

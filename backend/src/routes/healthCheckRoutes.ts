@@ -24,4 +24,6 @@ router.post('/run-all', healthCheckController.runAllChecks);
 // Add to routes/healthCheckRoutes.ts
 router.post('/validate', healthCheckController.validateHealthCheckConfig);
 
+router.get('/logs', healthCheckController.getLogHealthChecks);
+
 export default router;

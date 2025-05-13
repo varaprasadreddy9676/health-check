@@ -11,8 +11,32 @@ import { sendEmail } from '../config/email';
 import { renderHealthCheckAlertEmail } from '../utils/emailTemplates';
 import { notificationRepository } from '../repositories/notificationRepository';
 import logger from '../utils/logger';
+import fs from 'fs';
+import readline from 'readline';
+
+const statPromise = util.promisify(fs.stat);
+const existsPromise = util.promisify(fs.exists);
 
 const execPromise = util.promisify(exec);
+
+// Define LogDetails interface
+export interface LogDetails {
+  lastModified?: Date;
+  sizeBytes?: number;
+  matchedErrorPatterns?: string[];
+  isFresh?: boolean;
+}
+
+// Update HealthCheckResult interface to include logDetails
+export interface HealthCheckResult {
+  isHealthy: boolean;
+  status: ResultStatus;
+  details: string;
+  memoryUsage?: number;
+  cpuUsage?: number;
+  responseTime?: number;
+  logDetails?: LogDetails;
+}
 
 export interface HealthCheckResult {
   isHealthy: boolean;
@@ -47,6 +71,9 @@ export class HealthCheckService {
           break;
         case 'SERVER':
           result = await this.executeServerHealthCheck();
+          break;
+        case 'LOG':
+          result = await this.executeLogHealthCheck(healthCheck);
           break;
         default:
           result = {
@@ -233,10 +260,12 @@ export class HealthCheckService {
 
   private async executeProcessHealthCheck(healthCheck: IHealthCheck): Promise<HealthCheckResult> {
     try {
+      let result: HealthCheckResult;
+      
       if (healthCheck.port) {
         try {
           await execPromise(`nc -z localhost ${healthCheck.port}`);
-          return {
+          result = {
             isHealthy: true,
             status: 'Healthy',
             details: `Port ${healthCheck.port} is open`
@@ -248,33 +277,42 @@ export class HealthCheckService {
             details: `Port ${healthCheck.port} is not open`
           };
         }
-      }
-      if (!healthCheck.processKeyword) {
+      } else if (healthCheck.processKeyword) {
+        const commandToExecute = `ps -eo pid,%cpu,%mem,command | grep -E "${healthCheck.processKeyword}" | grep -v grep`;
+        const { stdout } = await execPromise(commandToExecute);
+        const lines = stdout.trim().split('\n');
+        
+        if (lines.length === 0 || lines[0] === '') {
+          return {
+            isHealthy: false,
+            status: 'Unhealthy',
+            details: `Process with keyword "${healthCheck.processKeyword}" not found`
+          };
+        }
+        
+        const [pid, cpu, memory, ...commandArray] = lines[0].split(/\s+/);
+        const command = commandArray.join(' ');
+        result = {
+          isHealthy: true,
+          status: 'Healthy',
+          details: `PID: ${pid}, Command: ${command}`,
+          cpuUsage: parseFloat(cpu),
+          memoryUsage: parseFloat(memory)
+        };
+      } else {
         return {
           isHealthy: false,
           status: 'Unhealthy',
-          details: 'No process keyword provided'
+          details: 'No process keyword or port provided'
         };
       }
-      const commandToExecute = `ps -eo pid,%cpu,%mem,command | grep -E "${healthCheck.processKeyword}" | grep -v grep`;
-      const { stdout } = await execPromise(commandToExecute);
-      const lines = stdout.trim().split('\n');
-      if (lines.length === 0 || lines[0] === '') {
-        return {
-          isHealthy: false,
-          status: 'Unhealthy',
-          details: `Process with keyword "${healthCheck.processKeyword}" not found`
-        };
+      
+      // If process is healthy and log file path is provided, also check logs
+      if (result.isHealthy && healthCheck.logFilePath) {
+        return await this.checkAssociatedLogs(result, healthCheck);
       }
-      const [pid, cpu, memory, ...commandArray] = lines[0].split(/\s+/);
-      const command = commandArray.join(' ');
-      return {
-        isHealthy: true,
-        status: 'Healthy',
-        details: `PID: ${pid}, Command: ${command}`,
-        cpuUsage: parseFloat(cpu),
-        memoryUsage: parseFloat(memory)
-      };
+      
+      return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       return {
@@ -284,7 +322,7 @@ export class HealthCheckService {
       };
     }
   }
-
+  
   private async executeServiceHealthCheck(healthCheck: IHealthCheck): Promise<HealthCheckResult> {
     try {
       if (!healthCheck.customCommand) {
@@ -294,27 +332,33 @@ export class HealthCheckService {
           details: 'No custom command provided'
         };
       }
+      
+      let result: HealthCheckResult;
       const { stdout } = await execPromise(healthCheck.customCommand);
       const response = stdout.trim();
-      if (healthCheck.expectedOutput && response.includes(healthCheck.expectedOutput)) {
-        return {
-          isHealthy: true,
-          status: 'Healthy',
-          details: `Command executed successfully. Response matches expected output.`
-        };
-      } else if (!healthCheck.expectedOutput) {
-        return {
-          isHealthy: true,
-          status: 'Healthy',
-          details: `Command executed successfully. Response: ${response}`
-        };
-      } else {
+      
+      if (healthCheck.expectedOutput && !response.includes(healthCheck.expectedOutput)) {
         return {
           isHealthy: false,
           status: 'Unhealthy',
           details: `Expected output not found. Response: ${response}`
         };
       }
+      
+      result = {
+        isHealthy: true,
+        status: 'Healthy',
+        details: healthCheck.expectedOutput
+          ? `Command executed successfully. Response matches expected output.`
+          : `Command executed successfully. Response: ${response}`
+      };
+      
+      // If service is healthy and log file path is provided, also check logs
+      if (result.isHealthy && healthCheck.logFilePath) {
+        return await this.checkAssociatedLogs(result, healthCheck);
+      }
+      
+      return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       return {
@@ -324,7 +368,6 @@ export class HealthCheckService {
       };
     }
   }
-
   private async executeServerHealthCheck(): Promise<HealthCheckResult> {
     try {
       const cpuUsage = os.loadavg()[0];
@@ -743,6 +786,232 @@ async sendConsolidatedNotifications(
       msg: `Error sending ${isRecovery ? 'recovery' : 'unhealthy'} notifications`,
       error: errorMessage
     });
+  }
+}
+
+// Modified function to handle log checks for process and service health checks
+private async checkAssociatedLogs(result: HealthCheckResult, healthCheck: IHealthCheck): Promise<HealthCheckResult> {
+  if (!healthCheck.logFilePath) {
+    return result;
+  }
+  
+  try {
+    // Check file exists
+    const fileExists = await existsPromise(healthCheck.logFilePath);
+    if (!fileExists) {
+      return {
+        isHealthy: false,
+        status: 'Unhealthy',
+        details: `${result.details} | Log file does not exist at path: ${healthCheck.logFilePath}`,
+      };
+    }
+
+    // Get file stats
+    const stats = await statPromise(healthCheck.logFilePath);
+    const logDetails: LogDetails = {
+      lastModified: stats.mtime,
+      sizeBytes: stats.size,
+      matchedErrorPatterns: [],
+      isFresh: true
+    };
+
+    // Check file freshness if configured
+    if (healthCheck.logFreshnessPeriod) {
+      const lastModifiedTime = stats.mtime.getTime();
+      const currentTime = new Date().getTime();
+      const freshnessThreshold = healthCheck.logFreshnessPeriod * 60 * 1000; // Convert minutes to ms
+      
+      if (currentTime - lastModifiedTime > freshnessThreshold) {
+        logDetails.isFresh = false;
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: `${result.details} | Log file has not been updated in the last ${healthCheck.logFreshnessPeriod} minutes`,
+          logDetails
+        };
+      }
+    }
+
+    // Check for error patterns
+    if (healthCheck.logErrorPatterns && healthCheck.logErrorPatterns.length > 0) {
+      const matchedPatterns = await this.checkLogForPatterns(
+        healthCheck.logFilePath, 
+        healthCheck.logErrorPatterns
+      );
+      
+      if (matchedPatterns.length > 0) {
+        logDetails.matchedErrorPatterns = matchedPatterns;
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: `${result.details} | Error pattern(s) found in log file: ${matchedPatterns.join(', ')}`,
+          logDetails
+        };
+      }
+    }
+
+    // Check file size limit
+    if (healthCheck.logMaxSizeMB) {
+      const maxSizeBytes = healthCheck.logMaxSizeMB * 1024 * 1024;
+      if (stats.size > maxSizeBytes) {
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: `${result.details} | Log file size (${Math.round(stats.size / (1024 * 1024))} MB) exceeds maximum (${healthCheck.logMaxSizeMB} MB)`,
+          logDetails
+        };
+      }
+    }
+
+    // If we get here, log check passed
+    result.logDetails = logDetails;
+    result.details = `${result.details} | Log check passed`;
+    return result;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      isHealthy: false,
+      status: 'Unhealthy',
+      details: `${result.details} | Error checking log file: ${errorMessage}`
+    };
+  }
+}
+
+private async checkLogForPatterns(filePath: string, patterns: string[]): Promise<string[]> {
+  // For large files, we only want to read the last N lines
+  const MAX_LINES_TO_READ = 1000;
+  const matchedPatterns: string[] = [];
+  
+  try {
+    // Read last lines of file efficiently
+    const fileStream = fs.createReadStream(filePath);
+    const rl = readline.createInterface({
+      input: fileStream,
+      crlfDelay: Infinity
+    });
+
+    const lines: string[] = [];
+    let lineCount = 0;
+    
+    for await (const line of rl) {
+      lines.push(line);
+      lineCount++;
+      
+      // Keep only the last MAX_LINES_TO_READ lines
+      if (lines.length > MAX_LINES_TO_READ) {
+        lines.shift();
+      }
+    }
+    
+    // Check for patterns in the latest lines
+    const combinedContent = lines.join('\n');
+    for (const pattern of patterns) {
+      if (combinedContent.includes(pattern)) {
+        matchedPatterns.push(pattern);
+      }
+    }
+    
+    return matchedPatterns;
+  } catch (error) {
+    logger.error({
+      msg: 'Error checking log file for patterns',
+      error: error instanceof Error ? error.message : String(error),
+      filePath
+    });
+    return [];
+  }
+}
+
+private async executeLogHealthCheck(healthCheck: IHealthCheck): Promise<HealthCheckResult> {
+  if (!healthCheck.logFilePath) {
+    return {
+      isHealthy: false,
+      status: 'Unhealthy',
+      details: 'No log file path provided'
+    };
+  }
+
+  try {
+    // Check file exists
+    const fileExists = await existsPromise(healthCheck.logFilePath);
+    if (!fileExists) {
+      return {
+        isHealthy: false,
+        status: 'Unhealthy',
+        details: `Log file does not exist at path: ${healthCheck.logFilePath}`
+      };
+    }
+
+    // Get file stats
+    const stats = await statPromise(healthCheck.logFilePath);
+    const logDetails: LogDetails = {
+      lastModified: stats.mtime,
+      sizeBytes: stats.size,
+      matchedErrorPatterns: [],
+      isFresh: true
+    };
+
+    // Check file freshness if configured
+    if (healthCheck.logFreshnessPeriod) {
+      const lastModifiedTime = stats.mtime.getTime();
+      const currentTime = new Date().getTime();
+      const freshnessThreshold = healthCheck.logFreshnessPeriod * 60 * 1000; // Convert minutes to ms
+      
+      if (currentTime - lastModifiedTime > freshnessThreshold) {
+        logDetails.isFresh = false;
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: `Log file has not been updated in the last ${healthCheck.logFreshnessPeriod} minutes`,
+          logDetails
+        };
+      }
+    }
+
+    // Check for error patterns
+    if (healthCheck.logErrorPatterns && healthCheck.logErrorPatterns.length > 0) {
+      const matchedPatterns = await this.checkLogForPatterns(
+        healthCheck.logFilePath, 
+        healthCheck.logErrorPatterns
+      );
+      
+      if (matchedPatterns.length > 0) {
+        logDetails.matchedErrorPatterns = matchedPatterns;
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: `Error pattern(s) found in log file: ${matchedPatterns.join(', ')}`,
+          logDetails
+        };
+      }
+    }
+
+    // Check file size limit
+    if (healthCheck.logMaxSizeMB) {
+      const maxSizeBytes = healthCheck.logMaxSizeMB * 1024 * 1024;
+      if (stats.size > maxSizeBytes) {
+        return {
+          isHealthy: false,
+          status: 'Unhealthy',
+          details: `Log file size (${Math.round(stats.size / (1024 * 1024))} MB) exceeds maximum (${healthCheck.logMaxSizeMB} MB)`,
+          logDetails
+        };
+      }
+    }
+
+    return {
+      isHealthy: true,
+      status: 'Healthy',
+      details: `Log file check passed`,
+      logDetails
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      isHealthy: false,
+      status: 'Unhealthy',
+      details: `Error checking log file: ${errorMessage}`
+    };
   }
 }
 }

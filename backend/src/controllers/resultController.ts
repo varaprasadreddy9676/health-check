@@ -94,6 +94,48 @@ export class ResultController {
       });
     }
   }
+  // In ResultController class
+async getLogDetails(req: Request, res: Response): Promise<Response> {
+  try {
+    const { id } = req.params;
+    const result = await healthCheckRepository.findResultById(id);
+    
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: `Result with ID ${id} not found`
+        }
+      });
+    }
+    
+    if (!result.logDetails) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: `No log details available for this result`
+        }
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      data: result.logDetails
+    });
+  } catch (error) {
+    logger.error({
+      msg: 'Error getting log details',
+      error: error instanceof Error ? error.message : String(error),
+      resultId: req.params.id
+    });
+    return res.status(500).json({
+      success: false,
+      error: {
+        message: 'Failed to retrieve log details'
+      }
+    });
+  }
+}
 }
 
 // Export controller instance

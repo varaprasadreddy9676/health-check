@@ -13,22 +13,40 @@ export class HealthCheckController {
    */
   validateHealthCheck = [
     body('name').notEmpty().withMessage('Name is required'),
-    body('type').isIn(['API', 'PROCESS', 'SERVICE', 'SERVER']).withMessage('Type must be one of: API, PROCESS, SERVICE, SERVER'),
+    body('type').isIn(['API', 'PROCESS', 'SERVICE', 'SERVER', 'LOG']).withMessage('Type must be one of: API, PROCESS, SERVICE, SERVER, LOG'),
     body('enabled').optional().isBoolean().withMessage('Enabled must be a boolean'),
     body('checkInterval').optional().isInt({ min: 10 }).withMessage('Check interval must be at least 10 seconds'),
     body('notifyOnFailure').optional().isBoolean().withMessage('NotifyOnFailure must be a boolean'),
     
-    // Type-specific validation
+    // API type validations
     body('endpoint').if(body('type').equals('API')).notEmpty().withMessage('Endpoint is required for API checks'),
     body('timeout').if(body('type').equals('API')).optional().isInt({ min: 1000 }).withMessage('Timeout must be at least 1000ms'),
+    body('expectedStatusCode').if(body('type').equals('API')).optional().isInt().withMessage('Expected status code must be an integer'),
+    body('expectedResponseContent').if(body('type').equals('API')).optional().isString().withMessage('Expected response content must be a string'),
     
-    body('processKeyword').if(body('type').equals('PROCESS')).notEmpty().withMessage('Process keyword is required for PROCESS checks'),
+    // Process type validations
+    body('processKeyword').if(body('type').equals('PROCESS')).optional().isString().withMessage('Process keyword must be a string'),
     body('port').if(body('type').equals('PROCESS')).optional().isInt({ min: 1, max: 65535 }).withMessage('Port must be between 1 and 65535'),
     
+    // Service type validations
     body('customCommand').if(body('type').equals('SERVICE')).notEmpty().withMessage('Custom command is required for SERVICE checks'),
-    body('expectedOutput').if(body('type').equals('SERVICE')).optional(),
+    body('expectedOutput').if(body('type').equals('SERVICE')).optional().isString().withMessage('Expected output must be a string'),
     
-    body('restartCommand').optional()
+    // Log type validations
+    body('logFilePath').if(body('type').equals('LOG')).notEmpty().withMessage('Log file path is required for LOG checks'),
+    body('logFreshnessPeriod').if(body('type').equals('LOG')).optional().isInt({ min: 1 }).withMessage('Log freshness period must be at least 1 minute'),
+    body('logErrorPatterns').if(body('type').equals('LOG')).optional().isArray().withMessage('Log error patterns must be an array'),
+    body('logMaxSizeMB').if(body('type').equals('LOG')).optional().isInt({ min: 1 }).withMessage('Log max size must be at least 1 MB'),
+    
+    // Process & Service with log monitoring
+    body('logFilePath').if(body('type').custom(type => type === 'PROCESS' || type === 'SERVICE')).optional().isString().withMessage('Log file path must be a string'),
+    body('logFreshnessPeriod').if(body('logFilePath').exists()).optional().isInt({ min: 1 }).withMessage('Log freshness period must be at least 1 minute'),
+    body('logErrorPatterns').if(body('logFilePath').exists()).optional().isArray().withMessage('Log error patterns must be an array'),
+    body('logMaxSizeMB').if(body('logFilePath').exists()).optional().isInt({ min: 1 }).withMessage('Log max size must be at least 1 MB'),
+    
+    // Restart capabilities
+    body('restartCommand').optional().isString().withMessage('Restart command must be a string'),
+    body('restartThreshold').optional().isInt({ min: 1 }).withMessage('Restart threshold must be at least 1')
   ];
 
   async reportRecovery(req: Request, res: Response): Promise<Response> {
@@ -516,7 +534,12 @@ async validateHealthCheckConfig(req: Request, res: Response): Promise<Response> 
       case 'SERVER':
         // No extra validation needed
         break;
-        
+
+       case 'LOG':
+          if (!config.logFilePath) {
+            extraValidation = { valid: false, message: 'Log file path is required for LOG type health checks' };
+          }
+          break;  
       default:
         extraValidation = { valid: false, message: `Invalid health check type: ${config.type}` };
     }
@@ -555,6 +578,27 @@ async validateHealthCheckConfig(req: Request, res: Response): Promise<Response> 
       success: false,
       error: {
         message: 'Failed to validate configuration'
+      }
+    });
+  }
+}
+// In HealthCheckController class
+async getLogHealthChecks(req: Request, res: Response): Promise<Response> {
+  try {
+    const healthChecks = await healthCheckRepository.findAll({ type: 'LOG' });
+    return res.status(200).json({
+      success: true,
+      data: healthChecks
+    });
+  } catch (error) {
+    logger.error({
+      msg: 'Error getting log health checks',
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return res.status(500).json({
+      success: false,
+      error: {
+        message: 'Failed to retrieve log health checks'
       }
     });
   }
